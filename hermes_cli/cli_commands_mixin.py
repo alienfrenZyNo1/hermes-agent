@@ -1524,6 +1524,10 @@ class CLICommandsMixin:
             # an approval here enforces the same caps as the live agent would.
             from tools.memory_tool import load_on_disk_store
             store = load_on_disk_store()
+        if args and args[0].lower() == "phi":
+            from tools.phi_memory import handle_phi_memory_args
+            print(handle_phi_memory_args(store, args[1:]))
+            return
         out = handle_pending_subcommand(
             wa.MEMORY, args,
             memory_store=store,

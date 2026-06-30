@@ -12246,7 +12246,57 @@ def _try_termux_fast_tui_launch() -> bool:
 
 def cmd_memory(args):
     sub = getattr(args, "memory_command", None)
-    if sub == "off":
+    if sub == "phi":
+        import json
+        from tools.memory_tool import MemoryStore
+        from tools.phi_memory import explain_text, format_phi_report, phi_enabled, recall, review_store
+        from hermes_cli.config import load_config
+
+        if not phi_enabled():
+            print("Phi Memory is disabled by memory.phi.enabled=false. Existing memory commands still use the built-in MEMORY.md/USER.md behavior.")
+            return
+
+        config = load_config()
+        mem_config = config.get("memory", {}) if isinstance(config.get("memory"), dict) else {}
+        store = MemoryStore(
+            memory_char_limit=mem_config.get("memory_char_limit", 2200),
+            user_char_limit=mem_config.get("user_char_limit", 1375),
+        )
+        store.load_from_disk()
+        phi_command = getattr(args, "phi_command", None) or "status"
+        target = getattr(args, "target", "memory")
+        as_json = getattr(args, "json", False)
+        if phi_command in {"status", "review", "compress"}:
+            report = review_store(store, target=target, dry_run=True)
+            if phi_command == "compress":
+                report["mode"] = "compress"
+                report["note"] = "Compression is currently proposal-only; no memory files were changed."
+            if as_json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                print(format_phi_report(report))
+        elif phi_command == "explain":
+            entries = store._entries_for(target)
+            report = explain_text(" ".join(getattr(args, "text", []) or []), target=target, existing_entries=entries)
+            if as_json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                c = report["candidate"]
+                print(f"Phi score: {c['phi_score']:.3f} — tier={c['tier']} — save={c['should_save']}")
+                print(c["reason"])
+        elif phi_command == "recall":
+            report = recall(store, " ".join(getattr(args, "query", []) or []), target=target)
+            if as_json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                print(f"Phi recall: {report['query']}")
+                for hit in report.get("hits", []):
+                    print(f"- [{hit['score']:.3f}] {hit['text']}")
+                if not report.get("hits"):
+                    print("No active memory hit. Use session_search for archive recall.")
+        else:
+            print("Unknown phi command. Use: status, review, compress, explain, recall")
+    elif sub == "off":
         from hermes_cli.config import load_config, save_config
 
         config = load_config()

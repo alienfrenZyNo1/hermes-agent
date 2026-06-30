@@ -303,10 +303,31 @@ class MemoryStore:
         if not content:
             return {"success": False, "error": "Content cannot be empty."}
 
-        # Scan for injection/exfiltration before accepting
+        # Scan for injection/exfiltration before accepting.
         scan_error = _scan_memory_content(content)
         if scan_error:
             return {"success": False, "error": scan_error}
+
+        from tools.phi_memory import normalize_text, phi_enabled, pressure_level, score_text
+
+        use_phi = phi_enabled()
+        phi_candidate = None
+        if use_phi:
+            phi_candidate = score_text(
+                content,
+                target=target,
+                explicit_user_request="remember" in content.lower(),
+                existing_entries=self._entries_for(target),
+            )
+            if phi_candidate.is_secret_or_sensitive:
+                phi_info = phi_candidate.to_dict()
+                # Never echo suspected secrets back into tool output/context.
+                phi_info["text"] = "[REDACTED: sensitive memory candidate]"
+                return {
+                    "success": False,
+                    "error": "Phi Memory rejected this entry because it appears secret or sensitive.",
+                    "phi": phi_info,
+                }
 
         with self._file_lock(self._path_for(target)):
             # Re-read from disk under lock to pick up writes from other sessions.
@@ -320,8 +341,14 @@ class MemoryStore:
             entries = self._entries_for(target)
             limit = self._char_limit(target)
 
-            # Reject exact duplicates
-            if content in entries:
+            # Reject exact duplicates. With Phi Memory enabled, also reject
+            # case/whitespace-only duplicates; disabling Phi preserves the old
+            # exact-match behavior.
+            duplicate = content in entries
+            if use_phi:
+                normalized_content = normalize_text(content)
+                duplicate = duplicate or any(normalize_text(e) == normalized_content for e in entries)
+            if duplicate:
                 return self._success_response(target, "Entry already exists (no duplicate added).")
 
             # Calculate what the new total would be
@@ -330,7 +357,7 @@ class MemoryStore:
 
             if new_total > limit:
                 current = self._char_count(target)
-                return {
+                result = {
                     "success": False,
                     "error": (
                         f"Memory at {current:,}/{limit:,} chars. "
@@ -342,6 +369,12 @@ class MemoryStore:
                     "current_entries": entries,
                     "usage": f"{current:,}/{limit:,}",
                 }
+                if use_phi and phi_candidate is not None:
+                    result["phi"] = {
+                        "candidate": phi_candidate.to_dict(),
+                        "pressure": pressure_level(current, limit),
+                    }
+                return result
 
             entries.append(content)
             self._set_entries(target, entries)
@@ -583,7 +616,7 @@ class MemoryStore:
 
     # -- Internal helpers --
 
-    def _success_response(self, target: str, message: str = None) -> Dict[str, Any]:
+    def _success_response(self, target: str, message: Optional[str] = None) -> Dict[str, Any]:
         entries = self._entries_for(target)
         current = self._char_count(target)
         limit = self._char_limit(target)

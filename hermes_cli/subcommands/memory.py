@@ -33,6 +33,26 @@ def build_memory_parser(subparsers, *, cmd_memory: Callable) -> None:
         help="Provider to configure directly (e.g. honcho), skipping the picker",
     )
     memory_sub.add_parser("status", help="Show current memory provider config")
+    phi_parser = memory_sub.add_parser(
+        "phi",
+        help="Inspect Phi Memory golden-ratio governance",
+        description="Review built-in memory with Phi Memory scoring. Review/compress default to dry-run.",
+    )
+    phi_sub = phi_parser.add_subparsers(dest="phi_command")
+    for name in ("status", "review", "compress"):
+        p = phi_sub.add_parser(name, help=f"Phi Memory {name}")
+        p.add_argument("--target", choices=["memory", "user"], default="memory")
+        if name in {"review", "compress"}:
+            p.add_argument("--apply", action="store_true", help="Reserved for future mutating compaction; current implementation remains safe/dry-run")
+            p.add_argument("--json", action="store_true", help="Print raw JSON report")
+    explain = phi_sub.add_parser("explain", help="Explain how Phi Memory would score text")
+    explain.add_argument("text", nargs="+", help="Memory text to explain")
+    explain.add_argument("--target", choices=["memory", "user"], default="memory")
+    explain.add_argument("--json", action="store_true", help="Print raw JSON report")
+    recall = phi_sub.add_parser("recall", help="Search active memory before falling back to session_search manually")
+    recall.add_argument("query", nargs="+", help="Recall query")
+    recall.add_argument("--target", choices=["memory", "user"], default="memory")
+    recall.add_argument("--json", action="store_true", help="Print raw JSON report")
     memory_sub.add_parser("off", help="Disable external provider (built-in only)")
     _reset_parser = memory_sub.add_parser(
         "reset",

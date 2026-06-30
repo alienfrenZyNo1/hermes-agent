@@ -20,13 +20,17 @@ Two files make up the agent's memory:
 Both are stored in `~/.hermes/memories/` and are injected into the system prompt as a frozen snapshot at session start. The agent manages its own memory via the `memory` tool — it can add, replace, or remove entries.
 
 :::info
-Character limits keep memory focused. Memory does **not** auto-compact: when a
-write would exceed the limit, the `memory` tool returns an error instead of
-silently dropping entries. The agent then makes room itself — consolidating or
-removing entries in the same turn before retrying (see [What Happens When Memory
-is Full](#what-happens-when-memory-is-full)). Note that `replace` is also bound
-by the limit: swapping an entry for a longer one can still overflow, so the new
+Character limits keep memory focused. Memory does **not** silently auto-compact:
+when a write would exceed the limit, the `memory` tool returns an error instead
+of dropping entries. The agent then makes room itself — consolidating or removing
+entries in the same turn before retrying (see [What Happens When Memory is
+Full](#what-happens-when-memory-is-full)). Note that `replace` is also bound by
+the limit: swapping an entry for a longer one can still overflow, so the new
 content must be shortened (or another entry removed) to fit.
+
+Hermes also includes **Phi Memory** governance: a golden-ratio review/scoring
+layer over the same `MEMORY.md` and `USER.md` files. Phi Memory proposes what to
+keep, compress, promote, or archive without changing the storage format.
 :::
 
 ## How Memory Appears in the System Prompt
@@ -169,6 +173,59 @@ User has a project.
 On January 5th, 2026, the user asked me to look at their project which is
 located at ~/code/api. I discovered it uses Go version 1.22 and...
 ```
+
+### Phi Memory review
+
+Phi Memory is a governance layer for the built-in memory files, not a separate
+memory database. It uses the golden ratio to balance durable long-term facts with
+recent short-term context:
+
+- `PHI = 1.61803398875`
+- `PHI_MAJOR = 1 / PHI ≈ 0.618` — long-term/durable share and promotion threshold
+- `PHI_MINOR = 1 / PHI² ≈ 0.382` — short-term/contextual share and retention threshold
+
+The scoring formula is:
+
+```text
+durable_value = average(importance, stability, confidence, frequency)
+active_value = average(recency, current_project_relevance, explicit_user_request)
+phi_score = 0.618 × durable_value + 0.382 × active_value
+```
+
+Interpretation:
+
+| Phi score | Decision |
+|-----------|----------|
+| `>= 0.618` | promote/keep as long-term durable memory |
+| `0.382..0.618` | keep as short-term/project memory or compact summary |
+| `< 0.382` | compress, remove, or rely on session search/archive |
+
+Memory pressure also uses golden-ratio thresholds:
+
+| Capacity | Action |
+|----------|--------|
+| `61.8%` | review consolidation candidates |
+| `80.9%` (`PHI / 2`) | actively consolidate before adding more |
+| `95%` | emergency compaction; avoid new writes until memory is cleaned |
+
+Phi Memory commands:
+
+```bash
+hermes memory phi status --target memory
+hermes memory phi review --target user --json
+hermes memory phi compress --target memory      # dry-run proposal only
+hermes memory phi explain "User prefers concise deployment summaries" --target user
+hermes memory phi recall "deployment coolify" --target memory
+
+# Same governance surface is also available in live sessions/gateway chats:
+/memory phi status
+/memory phi review --target user
+```
+
+`review` and `compress` are intentionally dry-run/proposal-first in the initial
+implementation. They explain what would be kept, compressed, promoted, removed,
+or archived without mutating `MEMORY.md` or `USER.md`. Use `session_search` for
+old transcript details instead of stuffing full histories into active memory.
 
 ## Duplicate Prevention
 

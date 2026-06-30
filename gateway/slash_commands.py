@@ -2464,6 +2464,9 @@ class GatewaySlashCommandsMixin:
         # no long-lived agent; the store persists to the same MEMORY/USER.md).
         # load_on_disk_store() honors the user's configured char limits.
         store = load_on_disk_store()
+        if args and args[0].lower() == "phi":
+            from tools.phi_memory import handle_phi_memory_args
+            return handle_phi_memory_args(store, args[1:])
 
         out = handle_pending_subcommand(
             wa.MEMORY, args, memory_store=store, set_mode_fn=_set_approval,
