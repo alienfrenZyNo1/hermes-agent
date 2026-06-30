@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from hermes_cli import plugins as plugins_mod
 from hermes_cli.plugins import PluginManager
 from tools.memory_tool import MemoryStore
 from tools.registry import registry
@@ -32,7 +33,7 @@ def _write_memory(home: Path, target: str, entries: list[str]) -> Path:
     return path
 
 
-def test_phi_memory_plugin_discovers_tool_slash_cli_and_hook(tmp_path, monkeypatch):
+def test_phi_memory_plugin_discovers_tool_slash_cli_and_optional_hook(tmp_path, monkeypatch):
     home = _enable_phi_plugin(tmp_path)
     monkeypatch.setenv("HERMES_HOME", str(home))
 
@@ -42,9 +43,31 @@ def test_phi_memory_plugin_discovers_tool_slash_cli_and_hook(tmp_path, monkeypat
     loaded = mgr._plugins["phi-memory"]
     assert loaded.enabled is True
     assert "phi_memory" in loaded.tools_registered
-    assert "pre_memory_write" in loaded.hooks_registered
+    if "pre_memory_write" in plugins_mod.VALID_HOOKS:
+        assert "pre_memory_write" in loaded.hooks_registered
+    else:
+        assert "pre_memory_write" not in loaded.hooks_registered
     assert "phi-memory" in mgr._plugin_commands
     assert "phi-memory" in mgr._cli_commands
+
+
+def test_phi_memory_plugin_skips_memory_hook_on_older_hosts(tmp_path, monkeypatch, caplog):
+    home = _enable_phi_plugin(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(
+        plugins_mod,
+        "VALID_HOOKS",
+        set(plugins_mod.VALID_HOOKS) - {"pre_memory_write"},
+    )
+
+    mgr = PluginManager()
+    mgr.discover_and_load()
+
+    loaded = mgr._plugins["phi-memory"]
+    assert loaded.enabled is True
+    assert "phi_memory" in loaded.tools_registered
+    assert "pre_memory_write" not in loaded.hooks_registered
+    assert "registered unknown hook 'pre_memory_write'" not in caplog.text
 
 
 def test_phi_memory_plugin_disabled_does_not_govern_memory_writes(tmp_path, monkeypatch):

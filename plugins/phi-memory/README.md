@@ -266,6 +266,26 @@ This does not delete or edit your memory files.
 
 ## Troubleshooting
 
+### `Plugin 'phi-memory' registered unknown hook 'pre_memory_write'`
+
+Update Phi Memory with the latest installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --force
+```
+
+Older Hermes versions do not advertise the `pre_memory_write` hook. Recent Phi
+Memory builds feature-detect that hook and skip registering it when unsupported,
+so the plugin still loads cleanly. On those older hosts, the CLI, slash command,
+and `phi_memory` tool still work; only automatic memory-write governance is
+unavailable until Hermes itself is updated.
+
+### `cannot import name 'load_on_disk_store'`
+
+Update Phi Memory with the latest installer. Newer plugin builds include a
+compatibility fallback for Hermes versions that do not expose
+`tools.memory_tool.load_on_disk_store()`.
+
 ### `hermes phi-memory` is not found
 
 Enable the plugin and restart any long-running Hermes gateway/session:
