@@ -131,6 +131,16 @@ Compression is proposal-only by default. The installer does **not** modify your
 memory files; it only copies the plugin into `~/.hermes/plugins/phi-memory/`,
 enables it, and runs a dry-run smoke check.
 
+For full automatic memory-write governance on Hermes hosts that do not yet
+support `pre_memory_write`, use the explicit advanced install mode:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --force --with-host-hooks
+```
+
+This advanced mode patches Hermes runtime files after creating timestamped
+backups; it is intentionally not the default plugin install path.
+
 See [`plugins/phi-memory/README.md`](plugins/phi-memory/README.md) for details,
 update/uninstall commands, safety notes, and configuration.
 

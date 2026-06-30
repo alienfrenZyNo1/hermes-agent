@@ -42,6 +42,17 @@ Replace/update an existing copied plugin install:
 curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --force
 ```
 
+Advanced install with automatic memory-write governance hooks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --force --with-host-hooks
+```
+
+`--with-host-hooks` patches the active Hermes runtime so the plugin can intercept
+memory writes. It creates timestamped backups of the patched host files and
+should be used only when you understand that it modifies Hermes core files, not
+just `~/.hermes/plugins/phi-memory/`.
+
 Install into a non-default Hermes home:
 
 ```bash
@@ -62,7 +73,13 @@ The installer:
 4. Enables the plugin with `hermes plugins enable phi-memory` unless
    `--no-enable` is passed.
 5. Runs a dry-run smoke check: `hermes phi-memory status --target memory`.
-6. Never edits `MEMORY.md` or `USER.md`.
+6. Reports whether the host supports `pre_memory_write`.
+7. Never edits `MEMORY.md` or `USER.md`.
+
+The optional `--with-host-hooks` flag additionally patches the active Hermes
+runtime files so automatic memory-write governance can work on hosts that do not
+yet have `pre_memory_write` built in. This advanced mode backs up the files it
+changes before writing.
 
 ### Manual install
 

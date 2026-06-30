@@ -13,8 +13,12 @@
 #   --subdir PATH           Plugin subdir inside repo (default: plugins/phi-memory)
 #   --hermes-home PATH      Hermes data dir (default: $HERMES_HOME or ~/.hermes)
 #   --source-dir PATH       Install from a local phi-memory plugin directory instead of git
+#   --with-host-hooks       Advanced: patch the active Hermes host so automatic
+#                           memory-write governance hooks are available
 #
-# The script never edits MEMORY.md or USER.md. Enabling only updates Hermes config.yaml.
+# The normal install never edits MEMORY.md or USER.md. Enabling only updates
+# Hermes config.yaml. --with-host-hooks additionally edits Hermes runtime files
+# after creating timestamped backups.
 
 set -euo pipefail
 
@@ -31,6 +35,7 @@ HERMES_HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
 FORCE=false
 ENABLE=true
 DOCTOR=true
+WITH_HOST_HOOKS=false
 SOURCE_DIR=""
 
 log() { printf "%b\n" "$*"; }
@@ -61,6 +66,8 @@ while [[ $# -gt 0 ]]; do
       HERMES_HOME_DIR="${2:-}"; shift 2 ;;
     --source-dir)
       SOURCE_DIR="${2:-}"; shift 2 ;;
+    --with-host-hooks)
+      WITH_HOST_HOOKS=true; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -134,6 +141,18 @@ enable_plugin() {
   HERMES_HOME="$HERMES_HOME_DIR" hermes plugins enable "$PLUGIN_NAME"
 }
 
+install_host_hooks() {
+  if [[ "$WITH_HOST_HOOKS" != true ]]; then
+    return 0
+  fi
+  local patcher="$TARGET_DIR/host_hooks.py"
+  [[ -f "$patcher" ]] || fatal "Host hook patcher not found: $patcher"
+  info "Installing advanced Phi Memory host hooks"
+  warn "This patches the active Hermes runtime files after creating timestamped backups."
+  HERMES_HOME="$HERMES_HOME_DIR" python3 "$patcher" --install --json
+  warn "Restart any running Hermes gateway/session so patched host hooks are loaded."
+}
+
 run_doctor() {
   if [[ "$DOCTOR" != true ]]; then
     warn "Skipping doctor checks (--no-doctor)."
@@ -153,6 +172,12 @@ run_doctor() {
 
   info "Installed plugin status:"
   HERMES_HOME="$HERMES_HOME_DIR" hermes plugins list --user --plain || true
+
+  local patcher="$TARGET_DIR/host_hooks.py"
+  if [[ -f "$patcher" ]]; then
+    info "Host hook compatibility:"
+    HERMES_HOME="$HERMES_HOME_DIR" python3 "$patcher" --check --json || true
+  fi
 }
 
 log ""
@@ -163,6 +188,7 @@ log ""
 SRC="$(resolve_source)"
 copy_plugin "$SRC"
 enable_plugin
+install_host_hooks
 run_doctor
 
 log ""
