@@ -8,6 +8,7 @@ business logic.
 
 from __future__ import annotations
 
+import shlex
 import sys
 from typing import Any, Sequence
 
@@ -37,10 +38,13 @@ def phi_enabled() -> bool:
 
 
 def handle_phi_memory_args(store: Any, args: Sequence[str]) -> str:
-    core = _core()
-    if core is None:
+    _core_mod = _core()
+    if _core_mod is None:
         return _DISABLED
-    return core.handle_phi_memory_args(store, args)
+    commands = sys.modules.get("hermes_plugins.phi_memory.commands")
+    if commands is not None and hasattr(commands, "handle_slash"):
+        return commands.handle_slash(" ".join(shlex.quote(str(arg)) for arg in args))
+    return _core_mod.handle_phi_memory_args(store, args)
 
 
 def __getattr__(name: str):

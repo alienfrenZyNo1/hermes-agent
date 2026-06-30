@@ -30,9 +30,20 @@ phi_memory:
   auto_safe_cleanup_on_write_pressure: false
   auto_safe_cleanup_threshold: 0.95
   default_dry_run: true
+  metadata_sidecar_enabled: true
+  metadata_sidecar_version: 1
+  fibonacci_review_enabled: true
+  fibonacci_review_intervals: [1, 2, 3, 5, 8, 13]
+  recall_session_fallback_enabled: true
+  recall_active_confidence_threshold: 0.45
+  skill_candidate_detection_enabled: true
+  skill_candidate_draft_enabled: true
+  semantic_compression_enabled: true
+  semantic_compression_apply_enabled: false
+  dashboard_enabled: true
 ```
 
-For compatibility, existing `memory.phi` config is still read. Top-level `phi_memory` values take precedence.
+For compatibility, existing `memory.phi` config is still read. When both locations are explicitly configured, top-level `phi_memory` values take precedence.
 
 ## CLI
 
@@ -43,6 +54,16 @@ hermes phi-memory compress --target memory
 hermes phi-memory compress --target memory --apply-safe
 hermes phi-memory explain "User prefers concise deployment summaries" --target user
 hermes phi-memory recall "deployment coolify" --target memory
+hermes phi-memory recall "deployment coolify" --target memory --include-session
+hermes phi-memory dashboard --target memory
+hermes phi-memory meta status --target memory
+hermes phi-memory meta rebuild --target memory
+hermes phi-memory review-due --target memory
+hermes phi-memory mark-reviewed <memory_id> --target memory
+hermes phi-memory schedule --target memory
+hermes phi-memory skills candidates --target memory
+hermes phi-memory skills draft <candidate_id> --target memory
+hermes phi-memory compress --target memory --semantic --budget 1400
 ```
 
 ## Slash command
@@ -54,6 +75,13 @@ hermes phi-memory recall "deployment coolify" --target memory
 /phi-memory compress --target memory --apply-safe
 /phi-memory explain User prefers concise deployment summaries --target user
 /phi-memory recall deployment coolify --target memory
+/phi-memory recall deployment coolify --target memory --include-session
+/phi-memory dashboard --target memory
+/phi-memory meta status --target memory
+/phi-memory review-due --target memory
+/phi-memory schedule --target memory
+/phi-memory skills candidates --target memory
+/phi-memory compress --target memory --semantic --budget 1400
 ```
 
 A legacy `/memory phi ...` shim may dispatch to this plugin when enabled.
@@ -67,6 +95,10 @@ The plugin registers the model tool `phi_memory` with actions:
 - `compress`
 - `explain`
 - `recall`
+- `dashboard`
+- `meta_status`, `meta_rebuild`, `meta_validate`
+- `review_due`, `schedule`
+- `skill_candidates`
 
 `compress` remains dry-run unless `apply_safe: true` is explicitly passed.
 

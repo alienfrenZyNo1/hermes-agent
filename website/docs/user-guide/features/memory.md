@@ -220,10 +220,25 @@ hermes phi-memory compress --target memory      # dry-run proposal only
 hermes phi-memory compress --target memory --apply-safe
 hermes phi-memory explain "User prefers concise deployment summaries" --target user
 hermes phi-memory recall "deployment coolify" --target memory
+hermes phi-memory recall "deployment coolify" --target memory --include-session
+hermes phi-memory dashboard --target memory
+hermes phi-memory meta status --target memory
+hermes phi-memory meta rebuild --target memory
+hermes phi-memory review-due --target memory
+hermes phi-memory mark-reviewed <memory_id> --target memory
+hermes phi-memory schedule --target memory
+hermes phi-memory skills candidates --target memory
+hermes phi-memory skills draft <candidate_id> --target memory
+hermes phi-memory compress --target memory --semantic --budget 1400
 
 # Same governance surface is also available in live sessions/gateway chats:
 /phi-memory status
-/phi-memory review --target user
+/phi-memory dashboard --target memory
+/phi-memory meta status --target memory
+/phi-memory review-due --target user
+/phi-memory recall deployment coolify --target memory --include-session
+/phi-memory skills candidates --target memory
+/phi-memory compress --target memory --semantic --budget 1400
 /phi-memory compress --target memory --apply-safe
 ```
 
@@ -247,6 +262,16 @@ If memory pressure reaches the 95% emergency band, `status`/`compress` can
 recommend `--apply-safe`, but no mutation happens unless that flag is present.
 Use `session_search` for old transcript details instead of stuffing full
 histories into active memory.
+
+Phi Memory v2 adds an optional `MEMORY.md.phi.json` / `USER.md.phi.json`
+metadata sidecar for review counters, Fibonacci review scheduling, and access
+counts. The sidecar is never required for old memory to work: missing, stale,
+or corrupt sidecars are reported and can be rebuilt without mutating the memory
+files. `dashboard` summarizes pressure, duplicates, due reviews, skill
+candidates, semantic compression opportunities, and sidecar health. `compress
+--semantic` is proposal-only: it shows a compact replacement and diff but never
+writes. Procedural entries can be surfaced as skill candidates and drafted under
+`skills/drafts/` for explicit human review.
 
 ## Duplicate Prevention
 
@@ -288,17 +313,31 @@ See [Session Search Tool](/user-guide/sessions#session-search-tool) for the thre
 
 ```yaml
 # In ~/.hermes/config.yaml
+phi_memory:
+  enabled: true
+  safe_apply_enabled: true
+  default_dry_run: true
+  auto_safe_cleanup_on_write_pressure: false
+  auto_safe_cleanup_threshold: 0.95
+  metadata_sidecar_enabled: true
+  metadata_sidecar_version: 1
+  fibonacci_review_enabled: true
+  fibonacci_review_intervals: [1, 2, 3, 5, 8, 13]
+  recall_session_fallback_enabled: true
+  recall_active_confidence_threshold: 0.45
+  skill_candidate_detection_enabled: true
+  skill_candidate_draft_enabled: true
+  semantic_compression_enabled: true
+  semantic_compression_apply_enabled: false
+  dashboard_enabled: true
+
+# Legacy compatibility: memory.phi is still read when phi_memory is absent.
 memory:
   memory_enabled: true
   user_profile_enabled: true
   memory_char_limit: 2200   # ~800 tokens
   user_char_limit: 1375     # ~500 tokens
   write_approval: false     # false = write freely (default) | true = require approval
-  phi:
-    enabled: true
-    safe_apply_enabled: true
-    auto_safe_cleanup_on_write_pressure: false
-    auto_safe_cleanup_threshold: 0.95
 ```
 
 ## Controlling memory writes (`write_approval`)

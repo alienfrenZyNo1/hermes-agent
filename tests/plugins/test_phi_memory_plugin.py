@@ -133,3 +133,23 @@ def test_memory_phi_legacy_config_is_respected(tmp_path, monkeypatch):
     out = mgr._plugin_commands["phi-memory"]["handler"]("compress --target memory --apply-safe")
 
     assert "safe apply is disabled" in out
+
+
+def test_phi_memory_new_plugin_config_preferred_when_both_exist(tmp_path, monkeypatch):
+    home = _enable_phi_plugin(
+        tmp_path,
+        "memory:\n"
+        "  phi:\n"
+        "    safe_apply_enabled: false\n"
+        "phi_memory:\n"
+        "  safe_apply_enabled: true\n",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    _write_memory(home, "memory", ["Project alpha uses FastAPI", " project alpha uses FASTAPI "])
+    mgr = PluginManager()
+    mgr.discover_and_load()
+
+    out = mgr._plugin_commands["phi-memory"]["handler"]("compress --target memory --apply-safe")
+
+    assert "safe apply is disabled" not in out
+    assert "applied=True" in out

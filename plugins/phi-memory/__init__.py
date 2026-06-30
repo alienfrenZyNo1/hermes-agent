@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import commands, hooks, schemas, tools
+from . import commands, dashboard, hooks, metadata, review, schemas, semantic, session_recall, skills, tools
 
 
 def register(ctx) -> None:

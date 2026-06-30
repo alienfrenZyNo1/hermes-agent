@@ -2053,6 +2053,17 @@ DEFAULT_CONFIG = {
         "auto_safe_cleanup_on_write_pressure": False,
         "auto_safe_cleanup_threshold": 0.95,
         "default_dry_run": True,
+        "metadata_sidecar_enabled": True,
+        "metadata_sidecar_version": 1,
+        "fibonacci_review_enabled": True,
+        "fibonacci_review_intervals": [1, 2, 3, 5, 8, 13],
+        "recall_session_fallback_enabled": True,
+        "recall_active_confidence_threshold": 0.45,
+        "skill_candidate_detection_enabled": True,
+        "skill_candidate_draft_enabled": True,
+        "semantic_compression_enabled": True,
+        "semantic_compression_apply_enabled": False,
+        "dashboard_enabled": True,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

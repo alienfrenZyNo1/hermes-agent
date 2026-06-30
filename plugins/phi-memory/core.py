@@ -33,23 +33,41 @@ def phi_config() -> Dict[str, Any]:
         "safe_apply_enabled": True,
         "auto_safe_cleanup_on_write_pressure": False,
         "auto_safe_cleanup_threshold": PHI_EMERGENCY,
+        "metadata_sidecar_enabled": True,
+        "metadata_sidecar_version": 1,
+        "fibonacci_review_enabled": True,
+        "fibonacci_review_intervals": list(FIBONACCI_REVIEW_INTERVALS),
+        "recall_session_fallback_enabled": True,
+        "recall_active_confidence_threshold": 0.45,
+        "skill_candidate_detection_enabled": True,
+        "skill_candidate_draft_enabled": True,
+        "semantic_compression_enabled": True,
+        "semantic_compression_apply_enabled": False,
+        "dashboard_enabled": True,
     }
     try:
         from hermes_cli.config import load_config
 
         config = load_config()
         memory_config = config.get("memory", {}) if isinstance(config, dict) else {}
-        # Prefer the plugin's top-level config, but keep backward compatibility
-        # with older memory.phi overrides. load_config() merges DEFAULT_CONFIG,
-        # so memory.phi must be applied last or legacy user config such as
-        # memory.phi.safe_apply_enabled=false would be masked by default
-        # phi_memory.safe_apply_enabled=true.
-        raw_plugin = config.get("phi_memory", {}) if isinstance(config, dict) else {}
-        if isinstance(raw_plugin, dict):
-            defaults.update(raw_plugin)
+        # Backward compatibility: legacy memory.phi works when no explicit
+        # top-level phi_memory block exists. If both are present in the user's
+        # config file, prefer the new plugin config.
         raw_legacy = memory_config.get("phi", {}) if isinstance(memory_config, dict) else {}
         if isinstance(raw_legacy, dict):
             defaults.update(raw_legacy)
+        explicit_plugin_config = False
+        try:
+            from hermes_constants import get_hermes_home
+            import yaml
+            cfg_path = get_hermes_home() / "config.yaml"
+            raw_user = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+            explicit_plugin_config = isinstance(raw_user, dict) and isinstance(raw_user.get("phi_memory"), dict)
+        except Exception:
+            explicit_plugin_config = False
+        raw_plugin = config.get("phi_memory", {}) if isinstance(config, dict) else {}
+        if explicit_plugin_config and isinstance(raw_plugin, dict):
+            defaults.update(raw_plugin)
     except Exception:
         pass
     return defaults
@@ -490,6 +508,9 @@ def _is_obviously_broken_fragment(entry: str) -> bool:
 
 _REDACTION_PATTERNS: Tuple[Tuple[re.Pattern[str], str | Callable[[Any], str]], ...] = (
     (re.compile(r"/[^\s`'\"]*/\.secrets/[^\s`'\"]+"), "[REDACTED_SECRET_PATH]"),
+    (re.compile(r"[A-Za-z]:\\[^\s`'\"]*\\\.secrets\\[^\s`'\"]+"), "[REDACTED_SECRET_PATH]"),
+    (re.compile(r"/[^\s`'\"]*(?:service[-_]?account|credentials?|creds)[^\s`'\"]*\.json", re.I), "[REDACTED_SECRET_PATH]"),
+    (re.compile(r"[A-Za-z]:\\[^\s`'\"]*(?:service[-_]?account|credentials?|creds)[^\s`'\"]*\.json", re.I), "[REDACTED_SECRET_PATH]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.I | re.S), "[REDACTED_PRIVATE_KEY]"),
     (re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\s'\";]{12,}", re.I), lambda m: re.sub(r"[:=].*", "=[REDACTED_SECRET]", m.group(0))),
     (re.compile(r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b"), "[REDACTED_SECRET]"),
