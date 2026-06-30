@@ -102,6 +102,40 @@ For more context, see the upstream Astral reports: [astral-sh/uv#13553](https://
 
 ---
 
+## Optional plugin: Phi Memory
+
+This fork includes **Phi Memory**, an optional Hermes plugin that adds
+memory-governance tools for the built-in `MEMORY.md` and `USER.md` files.
+It is designed to keep long-term agent memory compact, durable, and high-signal
+by reviewing memory pressure, identifying stale or duplicate entries, proposing
+compression, maintaining sidecar metadata, and surfacing skill candidates.
+
+Phi Memory is **not** a replacement memory backend or vector database. It sits
+above Hermes' normal memory files as a governance/hygiene layer.
+
+Install it into an existing Hermes install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash
+```
+
+Then try:
+
+```bash
+hermes phi-memory status --target memory
+hermes phi-memory review --target user
+hermes phi-memory compress --target memory
+```
+
+Compression is proposal-only by default. The installer does **not** modify your
+memory files; it only copies the plugin into `~/.hermes/plugins/phi-memory/`,
+enables it, and runs a dry-run smoke check.
+
+See [`plugins/phi-memory/README.md`](plugins/phi-memory/README.md) for details,
+update/uninstall commands, safety notes, and configuration.
+
+---
+
 ## Getting Started
 
 ```bash
