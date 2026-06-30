@@ -4,6 +4,34 @@
 
 It is **not** a memory provider backend. It does not replace built-in memory storage and it does not implement `plugins/memory/<provider>`. Instead, it layers review, scoring, recall, CLI/slash commands, a model tool, and optional deterministic write governance over the existing files.
 
+## Curl install
+
+For an existing Hermes install, install Phi Memory into the current user's Hermes home with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash
+```
+
+Replace an existing install/update the copied plugin files:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --force
+```
+
+Install into a non-default Hermes home:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienfrenZyNo1/hermes-agent/feature/phi-memory/scripts/install-phi-memory.sh | bash -s -- --hermes-home /path/to/.hermes
+```
+
+The installer:
+
+1. Requires an existing `hermes` CLI on `PATH`.
+2. Copies only `plugins/phi-memory/` into `~/.hermes/plugins/phi-memory/`.
+3. Enables the plugin with `hermes plugins enable phi-memory` unless `--no-enable` is passed.
+4. Runs a dry-run smoke check: `hermes phi-memory status --target memory`.
+5. Never edits `MEMORY.md` or `USER.md`.
+
 ## Enable / disable
 
 ```bash
@@ -11,7 +39,7 @@ hermes plugins enable phi-memory
 hermes plugins disable phi-memory
 ```
 
-The plugin can also be copied to:
+The plugin can also be copied manually to:
 
 ```text
 ~/.hermes/plugins/phi-memory/
