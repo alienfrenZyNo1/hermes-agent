@@ -227,24 +227,182 @@ _POST_ADD_NEW = '''            self.save_to_disk(target)
 '''
 
 
+
+_ADD_METHOD_TEMPLATE = '''    def add(self, target: str, content: str) -> Dict[str, Any]:
+        """Append a new entry. Returns error if it would exceed the char limit."""
+        content = content.strip()
+        if not content:
+            return {"success": False, "error": "Content cannot be empty."}
+
+        # Scan for injection/exfiltration before accepting
+        scan_error = _scan_memory_content(content)
+        if scan_error:
+            return {"success": False, "error": scan_error}
+
+        def _invoke_memory_hooks(stage: str, **extra: Any) -> list:
+            try:
+                from hermes_cli.plugins import has_hook, invoke_hook
+                if not has_hook("pre_memory_write"):
+                    return []
+                return invoke_hook(
+                    "pre_memory_write",
+                    action="add",
+                    target=target,
+                    content=content,
+                    store=self,
+                    stage=stage,
+                    **extra,
+                )
+            except Exception:
+                return []
+
+        with self._file_lock(self._path_for(target)):
+            # Re-read from disk under lock to pick up writes from other sessions.
+            # For add (append-only), we skip the drift guard — appending never
+            # clobbers existing content, so round-trip mismatches from prior
+            # tool-written entries in the same session are harmless. The drift
+            # guard remains active for replace/remove.
+            self._reload_target(target, skip_drift=True)
+
+            entries = self._entries_for(target)
+            limit = self._char_limit(target)
+
+            for hook_result in _invoke_memory_hooks(
+                "before_add",
+                entries=list(entries),
+                limit=limit,
+                already_locked=True,
+            ):
+                if not isinstance(hook_result, dict):
+                    continue
+                action = hook_result.get("action")
+                if isinstance(hook_result.get("content"), str):
+                    content = hook_result["content"].strip()
+                    if not content:
+                        return {"success": False, "error": "Content cannot be empty."}
+                if action == "reject":
+                    response = hook_result.get("response")
+                    return response if isinstance(response, dict) else {"success": False, "error": hook_result.get("message", "Memory write rejected by plugin.")}
+                if action == "skip":
+                    return self._success_response(target, str(hook_result.get("message") or "Entry already exists (no duplicate added)."))
+
+            # Core keeps backward-compatible exact duplicate behavior. Plugins
+            # may add normalized/semantic duplicate policy via pre_memory_write.
+            if content in entries:
+                return self._success_response(target, "Entry already exists (no duplicate added).")
+
+            # Calculate what the new total would be
+            new_entries = entries + [content]
+            new_total = len(ENTRY_DELIMITER.join(new_entries))
+
+            if new_total > limit:
+                current = self._char_count(target)
+                retry_metadata: Dict[str, Any] = {}
+                for hook_result in _invoke_memory_hooks(
+                    "over_limit",
+                    entries=list(entries),
+                    limit=limit,
+                    current_chars=current,
+                    new_total=new_total,
+                    already_locked=True,
+                ):
+                    if isinstance(hook_result, dict):
+                        metadata = hook_result.get("response_metadata")
+                        if isinstance(metadata, dict):
+                            retry_metadata.update(metadata)
+                        if hook_result.get("action") == "retry":
+                            entries = self._entries_for(target)
+                            new_entries = entries + [content]
+                            new_total = len(ENTRY_DELIMITER.join(new_entries))
+                            if new_total <= limit:
+                                entries.append(content)
+                                self._set_entries(target, entries)
+                                self.save_to_disk(target)
+                                response = self._success_response(target, "Entry added after memory write hook retry.")
+                                response.update(retry_metadata)
+                                return response
+
+                result = {
+                    "success": False,
+                    "error": (
+                        f"Memory at {current:,}/{limit:,} chars. "
+                        f"Adding this entry ({len(content)} chars) would exceed the limit. "
+                        f"Consolidate now: use 'replace' to merge overlapping entries into "
+                        f"shorter ones or 'remove' stale or less important entries (see "
+                        f"current_entries below), then retry this add — all in this turn."
+                    ),
+                    "current_entries": entries,
+                    "usage": f"{current:,}/{limit:,}",
+                }
+                result.update(retry_metadata)
+                return result
+
+            entries.append(content)
+            self._set_entries(target, entries)
+            self.save_to_disk(target)
+
+        try:
+            from hermes_cli.plugins import has_hook, invoke_hook
+            if has_hook("post_memory_write"):
+                invoke_hook("post_memory_write", action="add", target=target, content=content, store=self)
+        except Exception:
+            pass
+
+        return self._success_response(target, "Entry added.")
+'''
+
+
+def _replace_add_method_fallback(text: str, path: Path) -> tuple[str, str]:
+    """Replace only MemoryStore.add when exact anchors do not match."""
+    start = text.find("    def add(self, target: str, content: str)")
+    if start == -1:
+        start = text.find("    def add(self, target: str, content: str,")
+    if start == -1:
+        raise PatchError(f"Could not find MemoryStore.add method in {path}")
+    end = text.find("\n    def replace(self, target: str", start)
+    if end == -1:
+        raise PatchError(f"Could not find MemoryStore.replace boundary in {path}")
+    old_method = text[start:end]
+    required = [
+        "_scan_memory_content(content)",
+        "self._file_lock(self._path_for(target))",
+        "self._reload_target(target, skip_drift=True)",
+        "self._entries_for(target)",
+        "ENTRY_DELIMITER.join",
+        "self.save_to_disk(target)",
+    ]
+    missing = [needle for needle in required if needle not in old_method]
+    if missing:
+        raise PatchError(
+            f"MemoryStore.add layout in {path} is too different for safe fallback patch; "
+            f"missing anchors: {', '.join(missing)}"
+        )
+    return text[:start] + _ADD_METHOD_TEMPLATE.rstrip("\n") + text[end:], "add_method_fallback"
+
 def patch_memory_tool_py(path: Path, *, dry_run: bool) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     if "pre_memory_write" in text and "post_memory_write" in text:
         return {"path": str(path), "changed": False, "already_supported": True}
 
     new = text
+    patch_mode = "exact_anchors"
     replacements = [
         (_HELPER_INSERT_OLD, _HELPER_INSERT_NEW, "helper insertion"),
         (_BEFORE_ADD_OLD, _BEFORE_ADD_NEW, "before_add hook insertion"),
         (_OVER_LIMIT_OLD, _OVER_LIMIT_NEW, "over_limit hook insertion"),
         (_POST_ADD_OLD, _POST_ADD_NEW, "post add hook insertion"),
     ]
-    for old, replacement, label in replacements:
-        if old not in new:
-            raise PatchError(f"Could not find {label} anchor in {path}")
-        new = new.replace(old, replacement, 1)
+    try:
+        for old, replacement, label in replacements:
+            if old not in new:
+                raise PatchError(f"Could not find {label} anchor in {path}")
+            new = new.replace(old, replacement, 1)
+    except PatchError:
+        new, patch_mode = _replace_add_method_fallback(text, path)
 
-    return _write_if_changed(path, text, new, dry_run=dry_run)
+    result = _write_if_changed(path, text, new, dry_run=dry_run)
+    result["patch_mode"] = patch_mode
+    return result
 
 
 def check_support() -> dict[str, Any]:

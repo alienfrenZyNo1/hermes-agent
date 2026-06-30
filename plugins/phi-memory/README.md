@@ -53,6 +53,12 @@ memory writes. It creates timestamped backups of the patched host files and
 should be used only when you understand that it modifies Hermes core files, not
 just `~/.hermes/plugins/phi-memory/`.
 
+The host-hook patcher first tries small exact patches against known Hermes
+layouts. If `tools/memory_tool.py` has drifted enough that those anchors do not
+match, it falls back to replacing only `MemoryStore.add()` after verifying the
+expected method boundaries and storage primitives are present. The installer
+reports the mode as `exact_anchors` or `add_method_fallback`.
+
 Install into a non-default Hermes home:
 
 ```bash
