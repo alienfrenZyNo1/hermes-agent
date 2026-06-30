@@ -2057,6 +2057,9 @@ DEFAULT_CONFIG = {
             "emergency_pressure": 0.95,
             "fibonacci_review_intervals": [1, 2, 3, 5, 8, 13],
             "default_dry_run": True,
+            "safe_apply_enabled": True,
+            "auto_safe_cleanup_on_write_pressure": False,
+            "auto_safe_cleanup_threshold": 0.95,
         },
     },
 

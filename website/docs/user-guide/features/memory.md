@@ -214,18 +214,33 @@ Phi Memory commands:
 hermes memory phi status --target memory
 hermes memory phi review --target user --json
 hermes memory phi compress --target memory      # dry-run proposal only
+hermes memory phi compress --target memory --apply-safe
 hermes memory phi explain "User prefers concise deployment summaries" --target user
 hermes memory phi recall "deployment coolify" --target memory
 
 # Same governance surface is also available in live sessions/gateway chats:
 /memory phi status
 /memory phi review --target user
+/memory phi compress --target memory --apply-safe
 ```
 
-`review` and `compress` are intentionally dry-run/proposal-first in the initial
-implementation. They explain what would be kept, compressed, promoted, removed,
-or archived without mutating `MEMORY.md` or `USER.md`. Use `session_search` for
-old transcript details instead of stuffing full histories into active memory.
+`review` and `compress` are intentionally dry-run/proposal-first by default.
+They explain what would be kept, compressed, promoted, removed, or archived
+without mutating `MEMORY.md` or `USER.md`.
+
+`compress --apply-safe` is the only automatic Phi cleanup mode. It is
+explicit opt-in and deterministic: it may trim whitespace, remove empty or
+obviously broken fragments, remove exact/normalized duplicate entries, and
+redact obvious secret values or secret-file paths. It does **not** use an LLM,
+perform semantic summarisation, merge unrelated memories, or delete unique
+project facts. Before any write it creates `MEMORY.md.bak.<timestamp>` or
+`USER.md.bak.<timestamp>` beside the original file and returns a unified diff
+summary plus old/new character pressure.
+
+If memory pressure reaches the 95% emergency band, `status`/`compress` can
+recommend `--apply-safe`, but no mutation happens unless that flag is present.
+Use `session_search` for old transcript details instead of stuffing full
+histories into active memory.
 
 ## Duplicate Prevention
 
@@ -273,6 +288,11 @@ memory:
   memory_char_limit: 2200   # ~800 tokens
   user_char_limit: 1375     # ~500 tokens
   write_approval: false     # false = write freely (default) | true = require approval
+  phi:
+    enabled: true
+    safe_apply_enabled: true
+    auto_safe_cleanup_on_write_pressure: false
+    auto_safe_cleanup_threshold: 0.95
 ```
 
 ## Controlling memory writes (`write_approval`)

@@ -16,7 +16,7 @@ description: "Design notes for Phi Memory golden-ratio memory governance"
 Add a small governance layer, not a new memory backend:
 - New `tools/phi_memory.py` holds named golden-ratio constants, candidate schema, scoring, pressure analysis, dry-run review/compression plans, and recall over active memory entries.
 - Existing `MemoryStore` remains the storage layer. Phi Memory evaluates writes and adds pressure/explanation details only where useful, while preserving current file format/backward compatibility.
-- CLI surface extends `hermes memory` with `phi status|review|compress|explain|recall` for operator inspection. `review` and `compress` default to dry-run.
+- CLI surface extends `hermes memory` with `phi status|review|compress|explain|recall` for operator inspection. `review` and `compress` default to dry-run. `compress --apply-safe` performs only deterministic cleanup (duplicates, whitespace, empty/broken fragments, secret redaction) with a timestamped backup.
 - Config adds `memory.phi` values so ratios/thresholds are named and configurable instead of hardcoded throughout.
 
 ## Affected files
@@ -28,7 +28,7 @@ Add a small governance layer, not a new memory backend:
 - `tests/tools/test_phi_memory.py` plus existing memory/CLI/gateway memory tests — coverage.
 
 ## Risks
-- Over-aggressive automatic compression could destroy user data. Mitigation: first implementation only proposes compression by default; no mutation unless a future explicit apply path is added.
+- Over-aggressive automatic compression could destroy user data. Mitigation: semantic compression remains proposal-only; `--apply-safe` cannot rewrite/merge unique facts and only applies deterministic cleanup after creating a backup.
 - Prompt-cache breakage if active memory mutates mid-session. Mitigation: keep frozen snapshot behavior unchanged.
 - Tool schema bloat. Mitigation: no new model tool; use CLI/governance helpers and existing `memory` tool.
 - Heuristic scoring ambiguity. Mitigation: deterministic, testable scoring with explicit reason strings and conservative save/reject decisions.
@@ -41,4 +41,6 @@ Add a small governance layer, not a new memory backend:
 - Contradictory replacement proposal.
 - Capacity pressure bands: healthy, review, consolidate, emergency.
 - Dry-run review/compress does not mutate `MEMORY.md`/`USER.md`.
+- `compress --apply-safe` removes duplicates/empty fragments, redacts obvious secrets without echoing them, creates backups, reports pressure, and preserves unique project facts/protected memory types.
+- Optional on-write safe cleanup is disabled by default and retries once only when explicitly enabled.
 - CLI `memory phi ...` commands operate on temp `HERMES_HOME`.

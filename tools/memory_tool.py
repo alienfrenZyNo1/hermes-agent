@@ -308,8 +308,9 @@ class MemoryStore:
         if scan_error:
             return {"success": False, "error": scan_error}
 
-        from tools.phi_memory import normalize_text, phi_enabled, pressure_level, score_text
+        from tools.phi_memory import normalize_text, phi_config, phi_enabled, pressure_level, score_text
 
+        phi_cfg = phi_config()
         use_phi = phi_enabled()
         phi_candidate = None
         if use_phi:
@@ -357,6 +358,38 @@ class MemoryStore:
 
             if new_total > limit:
                 current = self._char_count(target)
+                safe_cleanup_report = None
+                auto_cleanup_enabled = bool(
+                    use_phi and phi_cfg.get("auto_safe_cleanup_on_write_pressure")
+                )
+                threshold = float(phi_cfg.get("auto_safe_cleanup_threshold", 0.95) or 0.95)
+                if auto_cleanup_enabled and limit > 0 and (current / limit) >= threshold:
+                    from tools.phi_memory import apply_safe_cleanup
+
+                    safe_cleanup_report = apply_safe_cleanup(self, target=target, already_locked=True)
+                    entries = self._entries_for(target)
+                    new_entries = entries + [content]
+                    new_total = len(ENTRY_DELIMITER.join(new_entries))
+                    if safe_cleanup_report.get("success") and new_total <= limit:
+                        entries.append(content)
+                        self._set_entries(target, entries)
+                        self.save_to_disk(target)
+                        response = self._success_response(target, "Entry added after Phi Memory safe cleanup.")
+                        response["phi"] = {
+                            "safe_cleanup_attempted": True,
+                            "safe_cleanup": {
+                                "applied": safe_cleanup_report.get("applied"),
+                                "entries_removed": safe_cleanup_report.get("entries_removed", 0),
+                                "entries_redacted": safe_cleanup_report.get("entries_redacted", 0),
+                                "old_chars": safe_cleanup_report.get("old_chars"),
+                                "new_chars": safe_cleanup_report.get("new_chars"),
+                                "percent_before": safe_cleanup_report.get("percent_before"),
+                                "percent_after": safe_cleanup_report.get("percent_after"),
+                                "backup_path": safe_cleanup_report.get("backup_path"),
+                            },
+                        }
+                        return response
+
                 result = {
                     "success": False,
                     "error": (
@@ -369,6 +402,15 @@ class MemoryStore:
                     "current_entries": entries,
                     "usage": f"{current:,}/{limit:,}",
                 }
+                if safe_cleanup_report is not None:
+                    result["phi_safe_cleanup_attempted"] = True
+                    result["phi_safe_cleanup"] = {
+                        "success": safe_cleanup_report.get("success"),
+                        "applied": safe_cleanup_report.get("applied"),
+                        "entries_removed": safe_cleanup_report.get("entries_removed", 0),
+                        "entries_redacted": safe_cleanup_report.get("entries_redacted", 0),
+                        "error": safe_cleanup_report.get("error"),
+                    }
                 if use_phi and phi_candidate is not None:
                     result["phi"] = {
                         "candidate": phi_candidate.to_dict(),

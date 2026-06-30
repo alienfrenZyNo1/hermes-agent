@@ -12249,7 +12249,7 @@ def cmd_memory(args):
     if sub == "phi":
         import json
         from tools.memory_tool import MemoryStore
-        from tools.phi_memory import explain_text, format_phi_report, phi_enabled, recall, review_store
+        from tools.phi_memory import apply_safe_cleanup, explain_text, format_phi_report, format_safe_cleanup_report, phi_enabled, recall, review_store
         from hermes_cli.config import load_config
 
         if not phi_enabled():
@@ -12267,6 +12267,13 @@ def cmd_memory(args):
         target = getattr(args, "target", "memory")
         as_json = getattr(args, "json", False)
         if phi_command in {"status", "review", "compress"}:
+            if phi_command == "compress" and getattr(args, "apply_safe", False):
+                report = apply_safe_cleanup(store, target=target)
+                if as_json:
+                    print(json.dumps(report, indent=2, ensure_ascii=False))
+                else:
+                    print(format_safe_cleanup_report(report))
+                return
             report = review_store(store, target=target, dry_run=True)
             if phi_command == "compress":
                 report["mode"] = "compress"

@@ -7,12 +7,15 @@ rules so storage remains backward-compatible and prompt-cache safe.
 
 from __future__ import annotations
 
+import difflib
 import math
 import re
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 PHI = 1.61803398875
 PHI_MAJOR = 1 / PHI
@@ -23,23 +26,34 @@ PHI_EMERGENCY = 0.95
 FIBONACCI_REVIEW_INTERVALS = (1, 2, 3, 5, 8, 13)
 
 
+def phi_config() -> Dict[str, Any]:
+    """Return Phi Memory config with safe defaults filled in."""
+    defaults: Dict[str, Any] = {
+        "enabled": True,
+        "safe_apply_enabled": True,
+        "auto_safe_cleanup_on_write_pressure": False,
+        "auto_safe_cleanup_threshold": PHI_EMERGENCY,
+    }
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+        memory_config = config.get("memory", {}) if isinstance(config, dict) else {}
+        raw_phi = memory_config.get("phi", {}) if isinstance(memory_config, dict) else {}
+        if isinstance(raw_phi, dict):
+            defaults.update(raw_phi)
+    except Exception:
+        pass
+    return defaults
+
+
 def phi_enabled() -> bool:
     """Return whether Phi Memory governance is enabled in config.
 
     Config is optional on tool paths, so failures default to enabled for the
     new feature while preserving an explicit ``memory.phi.enabled: false`` opt-out.
     """
-    try:
-        from hermes_cli.config import load_config
-
-        config = load_config()
-        memory_config = config.get("memory", {}) if isinstance(config, dict) else {}
-        phi_config = memory_config.get("phi", {}) if isinstance(memory_config, dict) else {}
-        if isinstance(phi_config, dict) and phi_config.get("enabled") is False:
-            return False
-    except Exception:
-        return True
-    return True
+    return phi_config().get("enabled") is not False
 
 
 class MemoryTier(str, Enum):
@@ -174,7 +188,7 @@ def pressure_level(current_chars: int, limit: int) -> Dict[str, Any]:
 
 _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", re.I),
-    re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\s'\"]{12,}", re.I),
+    re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?(?!\[REDACTED)[^\s'\"]{12,}", re.I),
     re.compile(r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
 ]
@@ -423,7 +437,7 @@ def review_store(store: Any, *, target: str = "memory", dry_run: bool = True) ->
             "action": action,
             "tier": candidate.tier,
             "phi_score": round(candidate.phi_score, 4),
-            "text_preview": candidate.text[:120],
+            "text_preview": _sanitize_for_diff(candidate.text)[:120],
             "reason": candidate.reason,
         })
 
@@ -444,6 +458,169 @@ def review_store(store: Any, *, target: str = "memory", dry_run: bool = True) ->
         "proposals": proposals,
         "note": "Dry-run only; no memory files were changed." if dry_run else "Review generated.",
     }
+
+
+def _trim_entry(entry: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in (entry or "").splitlines()]
+    text = "\n".join(line for line in lines if line)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _is_obviously_broken_fragment(entry: str) -> bool:
+    stripped = (entry or "").strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if stripped in {"...", "…", "-", "—", "§"}:
+        return True
+    if lowered in {"truncated", "[truncated]", "continued", "todo"}:
+        return True
+    if len(stripped) < 8 and not re.search(r"[A-Za-z0-9]{3,}", stripped):
+        return True
+    return False
+
+
+_REDACTION_PATTERNS: Tuple[Tuple[re.Pattern[str], str | Callable[[Any], str]], ...] = (
+    (re.compile(r"/[^\s`'\"]*/\.secrets/[^\s`'\"]+"), "[REDACTED_SECRET_PATH]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.I | re.S), "[REDACTED_PRIVATE_KEY]"),
+    (re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\s'\";]{12,}", re.I), lambda m: re.sub(r"[:=].*", "=[REDACTED_SECRET]", m.group(0))),
+    (re.compile(r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b"), "[REDACTED_SECRET]"),
+)
+
+
+def redact_sensitive_text(text: str) -> Tuple[str, bool]:
+    redacted = text or ""
+    for pattern, replacement in _REDACTION_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted, redacted != (text or "")
+
+
+def _sanitize_for_diff(text: str) -> str:
+    redacted, _ = redact_sensitive_text(text)
+    return redacted
+
+
+def apply_safe_cleanup(store: Any, *, target: str = "memory", already_locked: bool = False) -> Dict[str, Any]:
+    """Apply deterministic low-risk Phi Memory cleanup.
+
+    This never performs semantic summarisation or LLM rewriting.  It only trims
+    whitespace, removes empty/broken fragments, removes normalized duplicates,
+    and redacts obvious secret values/paths.  A timestamped backup is written
+    beside the memory file before any mutation.
+    """
+    if target not in {"memory", "user"}:
+        return {"success": False, "error": "Invalid --target for Phi Memory. Use --target memory or --target user."}
+    cfg = phi_config()
+    if cfg.get("safe_apply_enabled") is False:
+        return {"success": False, "error": "Phi Memory safe apply is disabled by memory.phi.safe_apply_enabled=false."}
+    if not hasattr(store, "_path_for") or not hasattr(store, "_write_file"):
+        return {"success": False, "error": "Memory store does not support safe cleanup."}
+
+    path: Path = store._path_for(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _run() -> Dict[str, Any]:
+        raw = path.read_text(encoding="utf-8") if path.exists() else ""
+        from tools.memory_tool import ENTRY_DELIMITER
+
+        old_entries = raw.split(ENTRY_DELIMITER) if raw.strip() else []
+        old_rendered_raw = ENTRY_DELIMITER.join(old_entries) if old_entries else ""
+        old_chars = len(old_rendered_raw)
+        limit = store._char_limit(target) if hasattr(store, "_char_limit") else 0
+        seen: set[str] = set()
+        new_entries: List[str] = []
+        removed = 0
+        redacted_count = 0
+        actions: List[str] = []
+        for entry in old_entries:
+            trimmed = _trim_entry(entry)
+            if _is_obviously_broken_fragment(trimmed):
+                removed += 1
+                actions.append("removed empty/broken fragment")
+                continue
+            redacted, was_redacted = redact_sensitive_text(trimmed)
+            if was_redacted:
+                redacted_count += 1
+                actions.append("redacted suspected sensitive value/path")
+            norm = normalize_text(redacted)
+            if norm in seen:
+                removed += 1
+                actions.append("removed duplicate")
+                continue
+            seen.add(norm)
+            new_entries.append(redacted)
+
+        if old_entries and not new_entries:
+            return {"success": False, "error": "Refusing safe cleanup because it would leave the memory file empty."}
+
+        new_rendered = ENTRY_DELIMITER.join(new_entries)
+        new_chars = len(new_rendered)
+        pressure_before = pressure_level(old_chars, limit)
+        pressure_after = pressure_level(new_chars, limit)
+        diff = "".join(difflib.unified_diff(
+            _sanitize_for_diff(old_rendered_raw).splitlines(keepends=True),
+            _sanitize_for_diff(new_rendered).splitlines(keepends=True),
+            fromfile=f"{path.name} before",
+            tofile=f"{path.name} after",
+        ))
+
+        report: Dict[str, Any] = {
+            "success": True,
+            "target": target,
+            "applied": False,
+            "old_chars": old_chars,
+            "new_chars": new_chars,
+            "percent_before": pressure_before["percent"],
+            "percent_after": pressure_after["percent"],
+            "pressure_before": pressure_before,
+            "pressure_after": pressure_after,
+            "entries_removed": removed,
+            "entries_redacted": redacted_count,
+            "backup_path": "",
+            "diff": diff,
+            "actions": actions,
+            "note": "No safe cleanup changes were needed.",
+        }
+        if new_rendered == old_rendered_raw:
+            store._set_entries(target, list(new_entries))
+            return report
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        backup_path = path.with_name(f"{path.name}.bak.{ts}")
+        suffix = 0
+        while backup_path.exists():
+            suffix += 1
+            backup_path = path.with_name(f"{path.name}.bak.{ts}.{suffix}")
+        try:
+            if path.exists():
+                shutil.copy2(path, backup_path)
+            else:
+                backup_path.write_text("", encoding="utf-8")
+        except (OSError, IOError) as exc:
+            report.update({
+                "success": False,
+                "applied": False,
+                "backup_path": str(backup_path),
+                "error": f"Backup creation failed; memory file was not changed: {exc}",
+                "note": "Safe cleanup aborted before writing because backup creation failed.",
+            })
+            return report
+        store._write_file(path, new_entries)
+        store._set_entries(target, list(new_entries))
+        report.update({
+            "applied": True,
+            "backup_path": str(backup_path),
+            "note": "Applied deterministic safe cleanup only; no semantic rewrite was performed.",
+        })
+        return report
+
+    if already_locked:
+        return _run()
+    lock_fn = getattr(store, "_file_lock", None)
+    if lock_fn is None:
+        return _run()
+    with lock_fn(path):
+        return _run()
 
 
 def recall(store: Any, query: str, *, target: str = "memory", limit: int = 5) -> Dict[str, Any]:
@@ -483,7 +660,14 @@ def handle_phi_memory_args(store: Any, args: Sequence[str]) -> str:
         if target not in {"memory", "user"}:
             return "Invalid --target for Phi Memory. Use --target memory or --target user."
     wants_json = "--json" in args
+    apply_safe = "--apply-safe" in args
     if command in {"status", "review", "compress"}:
+        if command == "compress" and apply_safe:
+            report = apply_safe_cleanup(store, target=target)
+            if wants_json:
+                import json
+                return json.dumps(report, indent=2, ensure_ascii=False)
+            return format_safe_cleanup_report(report)
         report = review_store(store, target=target, dry_run=True)
         if command == "compress":
             report["mode"] = "compress"
@@ -533,10 +717,28 @@ def _free_text_after_command(args: Sequence[str]) -> str:
         if arg == "--target":
             skip_next = True
             continue
-        if arg in {"--json", "--apply"}:
+        if arg in {"--json", "--apply", "--apply-safe"}:
             continue
         kept.append(arg)
     return " ".join(kept)
+
+
+def format_safe_cleanup_report(report: Dict[str, Any]) -> str:
+    if not report.get("success"):
+        return report.get("error", "Phi Memory safe cleanup failed.")
+    lines = [
+        f"Phi Memory safe cleanup {report.get('target', 'memory')} — applied={report.get('applied', False)}",
+        f"Chars: {report.get('old_chars', 0):,} → {report.get('new_chars', 0):,}",
+        f"Pressure: {report.get('percent_before', 0)}% → {report.get('percent_after', 0)}%",
+        f"Entries removed: {report.get('entries_removed', 0)}",
+        f"Entries redacted: {report.get('entries_redacted', 0)}",
+        f"Backup: {report.get('backup_path') or 'not created (no changes)'}",
+        "",
+        "Unified diff summary:",
+    ]
+    diff = report.get("diff") or "(no diff)"
+    lines.append(diff if len(diff) <= 4000 else diff[:4000] + "\n… (diff truncated)")
+    return "\n".join(lines)
 
 
 def format_phi_report(report: Dict[str, Any]) -> str:
@@ -549,6 +751,13 @@ def format_phi_report(report: Dict[str, Any]) -> str:
         "",
         "Top proposals:",
     ]
+    if usage.get("level") == "emergency":
+        lines.append(
+            "Recommendation: run `memory phi compress --target "
+            + report.get("target", "memory")
+            + " --apply-safe` for deterministic cleanup; no changes are applied without --apply-safe."
+        )
+        lines.append("")
     for proposal in report.get("proposals", [])[:10]:
         lines.append(
             f"- {proposal['action']} [{proposal['phi_score']:.3f}] "

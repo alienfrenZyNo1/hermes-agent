@@ -44,6 +44,8 @@ def build_memory_parser(subparsers, *, cmd_memory: Callable) -> None:
         p.add_argument("--target", choices=["memory", "user"], default="memory")
         if name in {"review", "compress"}:
             p.add_argument("--apply", action="store_true", help="Reserved for future mutating compaction; current implementation remains safe/dry-run")
+            if name == "compress":
+                p.add_argument("--apply-safe", action="store_true", help="Apply deterministic safe cleanup only: duplicates, whitespace, empty fragments, and secret redaction")
             p.add_argument("--json", action="store_true", help="Print raw JSON report")
     explain = phi_sub.add_parser("explain", help="Explain how Phi Memory would score text")
     explain.add_argument("text", nargs="+", help="Memory text to explain")

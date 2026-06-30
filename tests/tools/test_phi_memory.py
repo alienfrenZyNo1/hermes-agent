@@ -10,8 +10,10 @@ from tools.phi_memory import (
     PHI_HARD_WARNING,
     PHI_MAJOR,
     PHI_MINOR,
+    apply_safe_cleanup,
     explain_text,
     handle_phi_memory_args,
+    phi_config,
     pressure_level,
     recall,
     review_store,
@@ -194,3 +196,249 @@ def test_phi_disabled_restores_quiet_add_response(tmp_path, monkeypatch):
     assert result["success"] is True
     assert "phi" not in result
     assert "disabled" in disabled_msg.lower()
+
+
+def _write_memory_file(tmp_path, target, entries):
+    filename = "USER.md" if target == "user" else "MEMORY.md"
+    mem_dir = tmp_path / "memories"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    (mem_dir / filename).write_text("\n§\n".join(entries), encoding="utf-8")
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
+    store.load_from_disk()
+    return store, mem_dir / filename
+
+
+def test_compress_remains_dry_run_without_apply_safe(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        " project   alpha uses FASTAPI ",
+    ])
+    before = path.read_text(encoding="utf-8")
+
+    out = handle_phi_memory_args(store, ["compress", "--target", "memory"])
+    apply_out = handle_phi_memory_args(store, ["compress", "--target", "memory", "--apply"])
+
+    assert path.read_text(encoding="utf-8") == before
+    assert "Dry run: True" in out
+    assert "Dry run: True" in apply_out
+    assert not list(path.parent.glob("MEMORY.md.bak.*"))
+
+
+def test_apply_safe_removes_exact_and_normalized_duplicates(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        "Project alpha uses FastAPI",
+        " project   alpha uses FASTAPI ",
+        "Project beta uses PostgreSQL",
+    ])
+
+    report = apply_safe_cleanup(store, target="memory")
+    content = path.read_text(encoding="utf-8")
+
+    assert report["success"] is True
+    assert report["entries_removed"] == 2
+    assert content.count("Project alpha uses FastAPI") == 1
+    assert "Project beta uses PostgreSQL" in content
+    assert report["backup_path"]
+    assert path.parent.glob("MEMORY.md.bak.*")
+
+
+def test_apply_safe_trims_whitespace_and_removes_empty_entries(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "   Project alpha uses   FastAPI   ",
+        "   ",
+        "Project beta uses PostgreSQL",
+    ])
+
+    report = apply_safe_cleanup(store, target="memory")
+    content = path.read_text(encoding="utf-8")
+
+    assert report["entries_removed"] == 1
+    assert report["applied"] is True
+    assert "Project alpha uses FastAPI" in content
+    assert "   Project" not in content
+    assert "\n§\n   \n§\n" not in content
+
+
+def test_apply_safe_removes_broken_fragment(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        "...",
+        "Project beta uses PostgreSQL",
+    ])
+
+    report = apply_safe_cleanup(store, target="memory")
+    content = path.read_text(encoding="utf-8")
+
+    assert report["entries_removed"] == 1
+    assert "..." not in content
+    assert "Project alpha uses FastAPI" in content
+
+
+def test_apply_safe_redacts_suspected_secrets_without_echoing_them(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    sensitive_value = "«redacted:sk-…»"
+    sensitive_path = "/home/lunafox/.secrets/service-account.json"
+    store, path = _write_memory_file(tmp_path, "memory", [
+        f"Project alpha token={sensitive_value} and key file {sensitive_path}",
+        "Project beta uses PostgreSQL",
+    ])
+
+    dry_run = handle_phi_memory_args(store, ["compress", "--target", "memory"])
+    report = apply_safe_cleanup(store, target="memory")
+    content = path.read_text(encoding="utf-8")
+    report_text = json.dumps(report)
+
+    assert report["entries_redacted"] == 1
+    assert sensitive_value not in dry_run
+    assert sensitive_path not in dry_run
+    assert sensitive_value not in content
+    assert sensitive_path not in content
+    assert sensitive_value not in report_text
+    assert sensitive_path not in report_text
+    assert "[REDACTED_SECRET]" in content
+    assert "[REDACTED_SECRET_PATH]" in content
+
+
+def test_apply_safe_reports_pressure_and_creates_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        " project   alpha uses FastAPI ",
+    ])
+
+    report = apply_safe_cleanup(store, target="memory")
+
+    assert report["old_chars"] > report["new_chars"]
+    assert "percent_before" in report
+    assert "percent_after" in report
+    assert report["backup_path"]
+    assert (path.parent / report["backup_path"].split("/")[-1]).exists()
+    assert "--- MEMORY.md before" in report["diff"]
+
+
+def test_apply_safe_aborts_without_write_if_backup_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        " project   alpha uses FASTAPI ",
+    ])
+    before = path.read_text(encoding="utf-8")
+
+    def fail_copy(*_args, **_kwargs):
+        raise OSError("no backup")
+
+    monkeypatch.setattr("tools.phi_memory.shutil.copy2", fail_copy)
+    report = apply_safe_cleanup(store, target="memory")
+
+    assert report["success"] is False
+    assert report["applied"] is False
+    assert "Backup creation failed" in report["error"]
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_apply_safe_disabled_by_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n"
+        "  phi:\n"
+        "    safe_apply_enabled: false\n",
+        encoding="utf-8",
+    )
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha uses FastAPI",
+        " project   alpha uses FASTAPI ",
+    ])
+    before = path.read_text(encoding="utf-8")
+
+    report = apply_safe_cleanup(store, target="memory")
+    out = handle_phi_memory_args(store, ["compress", "--target", "memory", "--apply-safe"])
+
+    assert report["success"] is False
+    assert "safe apply is disabled" in report["error"]
+    assert "safe apply is disabled" in out
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_apply_safe_refuses_invalid_targets(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
+    store.load_from_disk()
+
+    report = apply_safe_cleanup(store, target="banana")
+    out = handle_phi_memory_args(store, ["compress", "--target", "banana", "--apply-safe"])
+
+    assert report["success"] is False
+    assert "Invalid --target" in report["error"]
+    assert "Invalid --target" in out
+
+
+def test_apply_safe_does_not_remove_unique_project_facts(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "memory", [
+        "Project alpha repo path /srv/alpha uses FastAPI",
+        "Deploy alpha with queue_application_deployment force rebuild",
+        "Runtime database name alpha.db",
+    ])
+
+    report = apply_safe_cleanup(store, target="memory")
+    content = path.read_text(encoding="utf-8")
+
+    assert report["success"] is True
+    assert "Project alpha repo path /srv/alpha uses FastAPI" in content
+    assert "queue_application_deployment" in content
+    assert "alpha.db" in content
+
+
+def test_apply_safe_keeps_protected_memory_types_unless_duplicate(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store, path = _write_memory_file(tmp_path, "user", [
+        "User prefers concise answers for debugging",
+        "Correction: do not use browser keys in app runtime",
+        "Decision: use Coolify for deployment",
+        "Open loop: currently validate Betfair place prices",
+        " user   prefers concise answers for debugging ",
+    ])
+
+    report = apply_safe_cleanup(store, target="user")
+    content = path.read_text(encoding="utf-8")
+
+    assert report["entries_removed"] == 1
+    assert "User prefers concise answers for debugging" in content
+    assert "Correction: do not use browser keys in app runtime" in content
+    assert "Decision: use Coolify for deployment" in content
+    assert "Open loop: currently validate Betfair place prices" in content
+
+
+def test_auto_safe_cleanup_on_write_pressure_defaults_false(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    cfg = phi_config()
+
+    assert cfg["safe_apply_enabled"] is True
+    assert cfg["auto_safe_cleanup_on_write_pressure"] is False
+
+
+def test_auto_safe_cleanup_on_write_pressure_retries_once_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n"
+        "  phi:\n"
+        "    auto_safe_cleanup_on_write_pressure: true\n"
+        "    auto_safe_cleanup_threshold: 0.5\n",
+        encoding="utf-8",
+    )
+    repeated = "Project alpha uses FastAPI and PostgreSQL"
+    store, path = _write_memory_file(tmp_path, "memory", [repeated, repeated.upper()])
+    store.memory_char_limit = len(path.read_text(encoding="utf-8")) + 5
+
+    result = store.add("memory", "New durable project fact")
+    content = path.read_text(encoding="utf-8")
+
+    assert result["success"] is True
+    assert result["phi"]["safe_cleanup_attempted"] is True
+    assert "New durable project fact" in content
+    assert content.count(repeated) == 1
