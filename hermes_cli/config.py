@@ -2043,24 +2043,16 @@ DEFAULT_CONFIG = {
         # "hindsight", "holographic", "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
         "provider": "",
-        # Phi Memory governance (golden-ratio memory review/scoring).  These
-        # values guide write explanations, CLI dry-run review/compression, and
-        # future automatic promotion/compaction without changing the underlying
-        # MEMORY.md / USER.md storage format.
-        "phi": {
-            "enabled": True,
-            "phi": 1.61803398875,
-            "major_ratio": 0.61803398875,
-            "minor_ratio": 0.38196601125,
-            "review_pressure": 0.61803398875,
-            "consolidate_pressure": 0.809016994375,
-            "emergency_pressure": 0.95,
-            "fibonacci_review_intervals": [1, 2, 3, 5, 8, 13],
-            "default_dry_run": True,
-            "safe_apply_enabled": True,
-            "auto_safe_cleanup_on_write_pressure": False,
-            "auto_safe_cleanup_threshold": 0.95,
-        },
+    },
+
+    # Optional phi-memory plugin defaults.  The plugin also respects legacy
+    # memory.phi config if present in user config files.
+    "phi_memory": {
+        "enabled": True,
+        "safe_apply_enabled": True,
+        "auto_safe_cleanup_on_write_pressure": False,
+        "auto_safe_cleanup_threshold": 0.95,
+        "default_dry_run": True,
     },
 
     # Subagent delegation — override the provider:model used by delegate_task

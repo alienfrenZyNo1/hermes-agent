@@ -308,27 +308,22 @@ class MemoryStore:
         if scan_error:
             return {"success": False, "error": scan_error}
 
-        from tools.phi_memory import normalize_text, phi_config, phi_enabled, pressure_level, score_text
-
-        phi_cfg = phi_config()
-        use_phi = phi_enabled()
-        phi_candidate = None
-        if use_phi:
-            phi_candidate = score_text(
-                content,
-                target=target,
-                explicit_user_request="remember" in content.lower(),
-                existing_entries=self._entries_for(target),
-            )
-            if phi_candidate.is_secret_or_sensitive:
-                phi_info = phi_candidate.to_dict()
-                # Never echo suspected secrets back into tool output/context.
-                phi_info["text"] = "[REDACTED: sensitive memory candidate]"
-                return {
-                    "success": False,
-                    "error": "Phi Memory rejected this entry because it appears secret or sensitive.",
-                    "phi": phi_info,
-                }
+        def _invoke_memory_hooks(stage: str, **extra: Any) -> list:
+            try:
+                from hermes_cli.plugins import has_hook, invoke_hook
+                if not has_hook("pre_memory_write"):
+                    return []
+                return invoke_hook(
+                    "pre_memory_write",
+                    action="add",
+                    target=target,
+                    content=content,
+                    store=self,
+                    stage=stage,
+                    **extra,
+                )
+            except Exception:
+                return []
 
         with self._file_lock(self._path_for(target)):
             # Re-read from disk under lock to pick up writes from other sessions.
@@ -342,14 +337,28 @@ class MemoryStore:
             entries = self._entries_for(target)
             limit = self._char_limit(target)
 
-            # Reject exact duplicates. With Phi Memory enabled, also reject
-            # case/whitespace-only duplicates; disabling Phi preserves the old
-            # exact-match behavior.
-            duplicate = content in entries
-            if use_phi:
-                normalized_content = normalize_text(content)
-                duplicate = duplicate or any(normalize_text(e) == normalized_content for e in entries)
-            if duplicate:
+            for hook_result in _invoke_memory_hooks(
+                "before_add",
+                entries=list(entries),
+                limit=limit,
+                already_locked=True,
+            ):
+                if not isinstance(hook_result, dict):
+                    continue
+                action = hook_result.get("action")
+                if isinstance(hook_result.get("content"), str):
+                    content = hook_result["content"].strip()
+                    if not content:
+                        return {"success": False, "error": "Content cannot be empty."}
+                if action == "reject":
+                    response = hook_result.get("response")
+                    return response if isinstance(response, dict) else {"success": False, "error": hook_result.get("message", "Memory write rejected by plugin.")}
+                if action == "skip":
+                    return self._success_response(target, str(hook_result.get("message") or "Entry already exists (no duplicate added)."))
+
+            # Core keeps backward-compatible exact duplicate behavior. Plugins
+            # may add normalized/semantic duplicate policy via pre_memory_write.
+            if content in entries:
                 return self._success_response(target, "Entry already exists (no duplicate added).")
 
             # Calculate what the new total would be
@@ -358,37 +367,30 @@ class MemoryStore:
 
             if new_total > limit:
                 current = self._char_count(target)
-                safe_cleanup_report = None
-                auto_cleanup_enabled = bool(
-                    use_phi and phi_cfg.get("auto_safe_cleanup_on_write_pressure")
-                )
-                threshold = float(phi_cfg.get("auto_safe_cleanup_threshold", 0.95) or 0.95)
-                if auto_cleanup_enabled and limit > 0 and (current / limit) >= threshold:
-                    from tools.phi_memory import apply_safe_cleanup
-
-                    safe_cleanup_report = apply_safe_cleanup(self, target=target, already_locked=True)
-                    entries = self._entries_for(target)
-                    new_entries = entries + [content]
-                    new_total = len(ENTRY_DELIMITER.join(new_entries))
-                    if safe_cleanup_report.get("success") and new_total <= limit:
-                        entries.append(content)
-                        self._set_entries(target, entries)
-                        self.save_to_disk(target)
-                        response = self._success_response(target, "Entry added after Phi Memory safe cleanup.")
-                        response["phi"] = {
-                            "safe_cleanup_attempted": True,
-                            "safe_cleanup": {
-                                "applied": safe_cleanup_report.get("applied"),
-                                "entries_removed": safe_cleanup_report.get("entries_removed", 0),
-                                "entries_redacted": safe_cleanup_report.get("entries_redacted", 0),
-                                "old_chars": safe_cleanup_report.get("old_chars"),
-                                "new_chars": safe_cleanup_report.get("new_chars"),
-                                "percent_before": safe_cleanup_report.get("percent_before"),
-                                "percent_after": safe_cleanup_report.get("percent_after"),
-                                "backup_path": safe_cleanup_report.get("backup_path"),
-                            },
-                        }
-                        return response
+                retry_metadata: Dict[str, Any] = {}
+                for hook_result in _invoke_memory_hooks(
+                    "over_limit",
+                    entries=list(entries),
+                    limit=limit,
+                    current_chars=current,
+                    new_total=new_total,
+                    already_locked=True,
+                ):
+                    if isinstance(hook_result, dict):
+                        metadata = hook_result.get("response_metadata")
+                        if isinstance(metadata, dict):
+                            retry_metadata.update(metadata)
+                        if hook_result.get("action") == "retry":
+                            entries = self._entries_for(target)
+                            new_entries = entries + [content]
+                            new_total = len(ENTRY_DELIMITER.join(new_entries))
+                            if new_total <= limit:
+                                entries.append(content)
+                                self._set_entries(target, entries)
+                                self.save_to_disk(target)
+                                response = self._success_response(target, "Entry added after memory write hook retry.")
+                                response.update(retry_metadata)
+                                return response
 
                 result = {
                     "success": False,
@@ -402,26 +404,19 @@ class MemoryStore:
                     "current_entries": entries,
                     "usage": f"{current:,}/{limit:,}",
                 }
-                if safe_cleanup_report is not None:
-                    result["phi_safe_cleanup_attempted"] = True
-                    result["phi_safe_cleanup"] = {
-                        "success": safe_cleanup_report.get("success"),
-                        "applied": safe_cleanup_report.get("applied"),
-                        "entries_removed": safe_cleanup_report.get("entries_removed", 0),
-                        "entries_redacted": safe_cleanup_report.get("entries_redacted", 0),
-                        "error": safe_cleanup_report.get("error"),
-                    }
-                if use_phi and phi_candidate is not None:
-                    result["phi"] = {
-                        "candidate": phi_candidate.to_dict(),
-                        "pressure": pressure_level(current, limit),
-                    }
+                result.update(retry_metadata)
                 return result
 
             entries.append(content)
             self._set_entries(target, entries)
             self.save_to_disk(target)
 
+        try:
+            from hermes_cli.plugins import has_hook, invoke_hook
+            if has_hook("post_memory_write"):
+                invoke_hook("post_memory_write", action="add", target=target, content=content, store=self)
+        except Exception:
+            pass
         return self._success_response(target, "Entry added.")
 
     def replace(self, target: str, old_text: str, new_content: str) -> Dict[str, Any]:

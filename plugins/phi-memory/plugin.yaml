@@ -1,0 +1,9 @@
+name: phi-memory
+version: 1.0.0
+description: "Optional Phi Memory governance layer for built-in MEMORY.md and USER.md files."
+author: NousResearch
+kind: standalone
+provides_tools:
+  - phi_memory
+provides_hooks:
+  - pre_memory_write

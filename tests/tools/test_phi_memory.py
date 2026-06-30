@@ -1,24 +1,46 @@
 """Tests for Phi Memory governance."""
 
+import importlib.util
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
 from tools.memory_tool import MemoryStore, memory_tool
-from tools.phi_memory import (
-    PHI,
-    PHI_HARD_WARNING,
-    PHI_MAJOR,
-    PHI_MINOR,
-    apply_safe_cleanup,
-    explain_text,
-    handle_phi_memory_args,
-    phi_config,
-    pressure_level,
-    recall,
-    review_store,
-    score_text,
-)
+
+
+def _enable_phi_plugin(home: Path, extra_config: str = "") -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.yaml").write_text(
+        "plugins:\n"
+        "  enabled:\n"
+        "    - phi-memory\n"
+        + extra_config,
+        encoding="utf-8",
+    )
+    from hermes_cli.plugins import discover_plugins
+    discover_plugins(force=True)
+
+_PHI_CORE_PATH = Path(__file__).resolve().parents[2] / "plugins" / "phi-memory" / "core.py"
+_PHI_SPEC = importlib.util.spec_from_file_location("test_phi_memory_plugin_core", _PHI_CORE_PATH)
+assert _PHI_SPEC and _PHI_SPEC.loader
+_phi_core = importlib.util.module_from_spec(_PHI_SPEC)
+sys.modules[_PHI_SPEC.name] = _phi_core
+_PHI_SPEC.loader.exec_module(_phi_core)
+
+PHI = _phi_core.PHI
+PHI_HARD_WARNING = _phi_core.PHI_HARD_WARNING
+PHI_MAJOR = _phi_core.PHI_MAJOR
+PHI_MINOR = _phi_core.PHI_MINOR
+apply_safe_cleanup = _phi_core.apply_safe_cleanup
+explain_text = _phi_core.explain_text
+handle_phi_memory_args = _phi_core.handle_phi_memory_args
+phi_config = _phi_core.phi_config
+pressure_level = _phi_core.pressure_level
+recall = _phi_core.recall
+review_store = _phi_core.review_store
+score_text = _phi_core.score_text
 
 
 def test_phi_constants():
@@ -107,6 +129,7 @@ def test_recall_searches_active_memory(tmp_path, monkeypatch):
 
 def test_memory_tool_phi_rejects_secret_without_echoing_candidate_text(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _enable_phi_plugin(tmp_path)
     store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
     store.load_from_disk()
     sensitive = "Remember token='abcdefghijklmnop'"
@@ -180,6 +203,8 @@ def test_phi_disabled_restores_quiet_add_response(tmp_path, monkeypatch):
     config_dir = tmp_path
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "config.yaml").write_text("memory:\n  phi:\n    enabled: false\n", encoding="utf-8")
+    from hermes_cli.plugins import discover_plugins
+    discover_plugins(force=True)
     store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
     store.load_from_disk()
 
@@ -332,7 +357,7 @@ def test_apply_safe_aborts_without_write_if_backup_fails(tmp_path, monkeypatch):
     def fail_copy(*_args, **_kwargs):
         raise OSError("no backup")
 
-    monkeypatch.setattr("tools.phi_memory.shutil.copy2", fail_copy)
+    monkeypatch.setattr(_phi_core.shutil, "copy2", fail_copy)
     report = apply_safe_cleanup(store, target="memory")
 
     assert report["success"] is False
@@ -424,12 +449,12 @@ def test_auto_safe_cleanup_on_write_pressure_defaults_false(tmp_path, monkeypatc
 
 def test_auto_safe_cleanup_on_write_pressure_retries_once_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    (tmp_path / "config.yaml").write_text(
+    _enable_phi_plugin(
+        tmp_path,
         "memory:\n"
         "  phi:\n"
         "    auto_safe_cleanup_on_write_pressure: true\n"
         "    auto_safe_cleanup_threshold: 0.5\n",
-        encoding="utf-8",
     )
     repeated = "Project alpha uses FastAPI and PostgreSQL"
     store, path = _write_memory_file(tmp_path, "memory", [repeated, repeated.upper()])

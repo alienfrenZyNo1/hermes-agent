@@ -28,9 +28,10 @@ Full](#what-happens-when-memory-is-full)). Note that `replace` is also bound by
 the limit: swapping an entry for a longer one can still overflow, so the new
 content must be shortened (or another entry removed) to fit.
 
-Hermes also includes **Phi Memory** governance: a golden-ratio review/scoring
-layer over the same `MEMORY.md` and `USER.md` files. Phi Memory proposes what to
-keep, compress, promote, or archive without changing the storage format.
+Hermes can also enable **Phi Memory** governance through the optional
+`phi-memory` plugin: a golden-ratio review/scoring layer over the same
+`MEMORY.md` and `USER.md` files. Phi Memory proposes what to keep, compress,
+promote, or archive without changing the storage format.
 :::
 
 ## How Memory Appears in the System Prompt
@@ -176,9 +177,9 @@ located at ~/code/api. I discovered it uses Go version 1.22 and...
 
 ### Phi Memory review
 
-Phi Memory is a governance layer for the built-in memory files, not a separate
-memory database. It uses the golden ratio to balance durable long-term facts with
-recent short-term context:
+Phi Memory is an optional `phi-memory` plugin governance layer for the built-in
+memory files, not a separate memory provider/database. It uses the golden ratio
+to balance durable long-term facts with recent short-term context:
 
 - `PHI = 1.61803398875`
 - `PHI_MAJOR = 1 / PHI ≈ 0.618` — long-term/durable share and promotion threshold
@@ -211,18 +212,23 @@ Memory pressure also uses golden-ratio thresholds:
 Phi Memory commands:
 
 ```bash
-hermes memory phi status --target memory
-hermes memory phi review --target user --json
-hermes memory phi compress --target memory      # dry-run proposal only
-hermes memory phi compress --target memory --apply-safe
-hermes memory phi explain "User prefers concise deployment summaries" --target user
-hermes memory phi recall "deployment coolify" --target memory
+hermes plugins enable phi-memory
+
+hermes phi-memory status --target memory
+hermes phi-memory review --target user --json
+hermes phi-memory compress --target memory      # dry-run proposal only
+hermes phi-memory compress --target memory --apply-safe
+hermes phi-memory explain "User prefers concise deployment summaries" --target user
+hermes phi-memory recall "deployment coolify" --target memory
 
 # Same governance surface is also available in live sessions/gateway chats:
-/memory phi status
-/memory phi review --target user
-/memory phi compress --target memory --apply-safe
+/phi-memory status
+/phi-memory review --target user
+/phi-memory compress --target memory --apply-safe
 ```
+
+Legacy `/memory phi ...` and `hermes memory phi ...` forms may dispatch to the
+plugin as compatibility shims when it is enabled.
 
 `review` and `compress` are intentionally dry-run/proposal-first by default.
 They explain what would be kept, compressed, promoted, removed, or archived
