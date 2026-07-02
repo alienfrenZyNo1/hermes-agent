@@ -2063,6 +2063,10 @@ DEFAULT_CONFIG = {
         "skill_candidate_draft_enabled": True,
         "semantic_compression_enabled": True,
         "semantic_compression_apply_enabled": False,
+        "auto_semantic_compression_on_write_pressure": False,
+        "auto_semantic_compression_threshold": 0.95,
+        "auto_semantic_compression_targets": ["memory"],
+        "auto_semantic_compression_min_savings_chars": 200,
         "dashboard_enabled": True,
     },
 

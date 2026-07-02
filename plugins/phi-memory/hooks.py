@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from . import core
+from . import core, semantic
 
 
 def on_pre_memory_write(**kwargs: Any) -> dict | None:
@@ -43,32 +44,86 @@ def on_pre_memory_write(**kwargs: Any) -> dict | None:
 
     if stage == "over_limit" and store is not None:
         cfg = core.phi_config()
-        if not bool(cfg.get("auto_safe_cleanup_on_write_pressure")):
-            return None
         limit = int(kwargs.get("limit") or 0)
         current = int(kwargs.get("current_chars") or 0)
-        threshold = float(cfg.get("auto_safe_cleanup_threshold", 0.95) or 0.95)
-        if limit <= 0 or (current / limit) < threshold:
+        if limit <= 0:
             return None
-        report = core.apply_safe_cleanup(store, target=target, already_locked=True)
-        return {
-            "action": "retry",
-            "response_metadata": {
-                "phi": {
+
+        safe_enabled = bool(cfg.get("auto_safe_cleanup_on_write_pressure"))
+        semantic_enabled = bool(cfg.get("auto_semantic_compression_on_write_pressure"))
+        if not safe_enabled and not semantic_enabled:
+            return None
+
+        metadata: dict[str, Any] = {"phi": {}}
+        pressure_ratio = current / limit
+
+        if safe_enabled:
+            safe_threshold = float(cfg.get("auto_safe_cleanup_threshold", 0.95) or 0.95)
+            if pressure_ratio >= safe_threshold:
+                safe_report = core.apply_safe_cleanup(store, target=target, already_locked=True)
+                metadata["phi"].update({
                     "safe_cleanup_attempted": True,
                     "safe_cleanup": {
-                        "success": report.get("success"),
-                        "applied": report.get("applied"),
-                        "entries_removed": report.get("entries_removed", 0),
-                        "entries_redacted": report.get("entries_redacted", 0),
-                        "old_chars": report.get("old_chars"),
-                        "new_chars": report.get("new_chars"),
-                        "percent_before": report.get("percent_before"),
-                        "percent_after": report.get("percent_after"),
-                        "backup_path": report.get("backup_path"),
-                        "error": report.get("error"),
+                        "success": safe_report.get("success"),
+                        "applied": safe_report.get("applied"),
+                        "entries_removed": safe_report.get("entries_removed", 0),
+                        "entries_redacted": safe_report.get("entries_redacted", 0),
+                        "old_chars": safe_report.get("old_chars"),
+                        "new_chars": safe_report.get("new_chars"),
+                        "percent_before": safe_report.get("percent_before"),
+                        "percent_after": safe_report.get("percent_after"),
+                        "backup_path": safe_report.get("backup_path"),
+                        "error": safe_report.get("error"),
                     },
-                },
-            },
-        }
+                })
+                current = int(safe_report.get("new_chars") or store._char_count(target))
+                pressure_ratio = current / limit
+
+        if semantic_enabled:
+            targets = cfg.get("auto_semantic_compression_targets", ["memory"])
+            if isinstance(targets, str):
+                try:
+                    parsed_targets = json.loads(targets)
+                except json.JSONDecodeError:
+                    parsed_targets = targets
+                targets = parsed_targets
+            if isinstance(targets, str):
+                targets = [part.strip() for part in targets.split(",") if part.strip()]
+            semantic_threshold = float(cfg.get("auto_semantic_compression_threshold", cfg.get("auto_safe_cleanup_threshold", 0.95)) or 0.95)
+            min_savings = int(cfg.get("auto_semantic_compression_min_savings_chars", 200) or 0)
+            if target in set(targets) and pressure_ratio >= semantic_threshold:
+                delimiter_chars = len("\n§\n") if store._entries_for(target) else 0
+                budget = max(0, limit - len(content.strip()) - delimiter_chars)
+                proposal = semantic.semantic_compression_proposal(store, target=target, budget=budget)
+                savings = int(proposal.get("old_chars") or 0) - int(proposal.get("proposed_chars") or 0)
+                if savings >= min_savings:
+                    semantic_report = semantic.apply_semantic_compression(
+                        store,
+                        target=target,
+                        budget=budget,
+                        already_locked=True,
+                        reason="auto_write_pressure",
+                    )
+                else:
+                    semantic_report = dict(proposal)
+                    semantic_report.update({
+                        "applied": False,
+                        "policy_warning": f"Skipped semantic compression because projected savings {savings} chars are below configured minimum {min_savings}.",
+                    })
+                metadata["phi"].update({
+                    "semantic_compression_attempted": True,
+                    "semantic_compression": {
+                        "success": semantic_report.get("success"),
+                        "applied": semantic_report.get("applied"),
+                        "entries_removed": semantic_report.get("entries_removed", 0),
+                        "old_chars": semantic_report.get("old_chars"),
+                        "proposed_chars": semantic_report.get("proposed_chars"),
+                        "backup_path": semantic_report.get("backup_path"),
+                        "error": semantic_report.get("error"),
+                        "policy_warning": semantic_report.get("policy_warning"),
+                    },
+                })
+
+        if metadata["phi"]:
+            return {"action": "retry", "response_metadata": metadata}
     return None

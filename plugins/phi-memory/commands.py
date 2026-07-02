@@ -101,7 +101,8 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     compress = sub.add_parser("compress", help="Phi Memory compress")
     compress.add_argument("--target", choices=["memory", "user"], default="memory")
     compress.add_argument("--apply-safe", action="store_true", help="Apply deterministic safe cleanup only, with backup")
-    compress.add_argument("--semantic", action="store_true", help="Generate proposal-only semantic compression diff")
+    compress.add_argument("--semantic", action="store_true", help="Generate semantic compression diff")
+    compress.add_argument("--apply-semantic", action="store_true", help="Apply opt-in semantic compression when phi_memory.semantic_compression_apply_enabled=true")
     compress.add_argument("--budget", type=int, default=None)
     compress.add_argument("--json", action="store_true", help="Print raw JSON report")
 
@@ -167,6 +168,8 @@ def execute(args) -> str:
     if command in {"status", "review"}:
         return _json_or_text(core.review_store(store, target=target, dry_run=True), core.format_phi_report, as_json)
     if command == "compress":
+        if bool(getattr(args, "apply_semantic", False)):
+            return _json_or_text(semantic.apply_semantic_compression(store, target, budget=getattr(args, "budget", None)), semantic.format_semantic_proposal, as_json)
         if bool(getattr(args, "semantic", False)):
             return _json_or_text(semantic.semantic_compression_proposal(store, target, budget=getattr(args, "budget", None)), semantic.format_semantic_proposal, as_json)
         if bool(getattr(args, "apply_safe", False)):

@@ -43,6 +43,10 @@ def phi_config() -> Dict[str, Any]:
         "skill_candidate_draft_enabled": True,
         "semantic_compression_enabled": True,
         "semantic_compression_apply_enabled": False,
+        "auto_semantic_compression_on_write_pressure": False,
+        "auto_semantic_compression_threshold": PHI_EMERGENCY,
+        "auto_semantic_compression_targets": ["memory"],
+        "auto_semantic_compression_min_savings_chars": 200,
         "dashboard_enabled": True,
     }
     try:

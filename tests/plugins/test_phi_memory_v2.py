@@ -182,6 +182,82 @@ def test_semantic_compression_proposal_is_diff_only_and_preserves_exact_facts(tm
     assert before == after
 
 
+def test_semantic_compression_apply_requires_explicit_config(tmp_path, monkeypatch):
+    home, plugin = _load_phi(
+        tmp_path,
+        monkeypatch,
+        [
+            "Project alpha repo /srv/alpha uses Postgres.",
+            "Debug note: tried random thing that was noisy and should be trimmed.",
+        ],
+    )
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
+    store.load_from_disk()
+    before = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+
+    report = plugin.semantic.apply_semantic_compression(store, "memory", budget=1000)
+    after = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+
+    assert report["success"] is False
+    assert "semantic_compression_apply_enabled=false" in report["error"]
+    assert before == after
+
+
+def test_semantic_compression_apply_writes_backup_when_enabled(tmp_path, monkeypatch):
+    home, plugin = _load_phi(
+        tmp_path,
+        monkeypatch,
+        [
+            "Project alpha repo /srv/alpha uses Postgres.",
+            "Debug note: tried random thing that was noisy and should be trimmed.",
+        ],
+        extra_config="phi_memory:\n  semantic_compression_apply_enabled: true\n",
+    )
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
+    store.load_from_disk()
+
+    report = plugin.semantic.apply_semantic_compression(store, "memory", budget=1000)
+    after = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+
+    assert report["success"] is True
+    assert report["applied"] is True
+    assert Path(report["backup_path"]).exists()
+    assert "Project alpha repo" in after
+    assert "Debug note" not in after
+
+
+def test_auto_semantic_compression_on_write_pressure_is_opt_in(tmp_path, monkeypatch):
+    home, _plugin = _load_phi(
+        tmp_path,
+        monkeypatch,
+        [
+            "Project alpha repo /srv/alpha uses Postgres and must keep exact path.",
+            "Debug note: tried random thing that was noisy and should be trimmed during semantic compression.",
+        ],
+        extra_config=(
+            "phi_memory:\n"
+            "  semantic_compression_apply_enabled: true\n"
+            "  auto_semantic_compression_on_write_pressure: true\n"
+            "  auto_semantic_compression_threshold: 0.5\n"
+            "  auto_semantic_compression_min_savings_chars: 1\n"
+            "  auto_semantic_compression_targets:\n"
+            "    - memory\n"
+        ),
+    )
+    store = MemoryStore(memory_char_limit=145, user_char_limit=1000)
+    store.load_from_disk()
+
+    result = store.add("memory", "Remember this compact durable fact.")
+    after = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+
+    assert result["success"] is True
+    assert result["phi"]["semantic_compression_attempted"] is True
+    assert result["phi"]["semantic_compression"]["applied"] is True
+    assert Path(result["phi"]["semantic_compression"]["backup_path"]).exists()
+    assert "Debug note" not in after
+    assert "Remember this compact durable fact." in after
+
+
 def test_dashboard_text_and_json_include_health_fields(tmp_path, monkeypatch):
     _home, plugin = _load_phi(
         tmp_path,
@@ -211,7 +287,7 @@ def test_cli_parser_accepts_v2_commands(tmp_path, monkeypatch, capsys):
     parser = argparse.ArgumentParser()
     cmd["setup_fn"](parser)
 
-    for argv in (["dashboard", "--json"], ["meta", "status", "--target", "memory"], ["review-due", "--target", "memory"], ["schedule", "--target", "memory"], ["skills", "candidates", "--target", "memory"], ["compress", "--target", "memory", "--semantic", "--budget", "1400"]):
+    for argv in (["dashboard", "--json"], ["meta", "status", "--target", "memory"], ["review-due", "--target", "memory"], ["schedule", "--target", "memory"], ["skills", "candidates", "--target", "memory"], ["compress", "--target", "memory", "--semantic", "--budget", "1400"], ["compress", "--target", "memory", "--apply-semantic", "--budget", "1400"]):
         args = parser.parse_args(list(argv))
         cmd["handler_fn"](args)
 

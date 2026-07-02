@@ -36,6 +36,8 @@ def handle_phi_memory(args: dict, **_kwargs: Any) -> str:
         if action == "compress":
             if bool(args.get("apply_safe")):
                 return tool_result(core.apply_safe_cleanup(store, target=target))
+            if bool(args.get("apply_semantic")):
+                return tool_result(semantic.apply_semantic_compression(store, target=target, budget=args.get("budget")))
             if bool(args.get("semantic")):
                 return tool_result(semantic.semantic_compression_proposal(store, target=target, budget=args.get("budget")))
             report = core.review_store(store, target=target, dry_run=True)

@@ -230,6 +230,7 @@ hermes phi-memory schedule --target memory
 hermes phi-memory skills candidates --target memory
 hermes phi-memory skills draft <candidate_id> --target memory
 hermes phi-memory compress --target memory --semantic --budget 1400
+hermes phi-memory compress --target memory --apply-semantic --budget 1400  # requires semantic_compression_apply_enabled=true
 
 # Same governance surface is also available in live sessions/gateway chats:
 /phi-memory status
@@ -249,17 +250,40 @@ plugin as compatibility shims when it is enabled.
 They explain what would be kept, compressed, promoted, removed, or archived
 without mutating `MEMORY.md` or `USER.md`.
 
-`compress --apply-safe` is the only automatic Phi cleanup mode. It is
-explicit opt-in and deterministic: it may trim whitespace, remove empty or
-obviously broken fragments, remove exact/normalized duplicate entries, and
-redact obvious secret values or secret-file paths. It does **not** use an LLM,
-perform semantic summarisation, merge unrelated memories, or delete unique
-project facts. Before any write it creates `MEMORY.md.bak.<timestamp>` or
-`USER.md.bak.<timestamp>` beside the original file and returns a unified diff
-summary plus old/new character pressure.
+`compress --apply-safe` applies only deterministic safe cleanup. It may trim
+whitespace, remove empty or obviously broken fragments, remove exact/normalized
+duplicate entries, and redact obvious secret values or secret-file paths. It
+does **not** use an LLM, perform semantic summarisation, merge unrelated
+memories, or delete unique project facts. Before any write it creates
+`MEMORY.md.bak.<timestamp>` or `USER.md.bak.<timestamp>` beside the original
+file and returns a unified diff summary plus old/new character pressure.
+
+`compress --apply-semantic` is an advanced opt-in path. It only works when
+`phi_memory.semantic_compression_apply_enabled: true` is set. It writes a
+backup named `*.semantic.bak.<timestamp>`, applies the same semantic proposal
+algorithm shown by `compress --semantic`, and returns the diff. Because this can
+remove low-value unique entries, keep it disabled by default for shared/user
+profiles unless you have reviewed the policy.
+
+Automatic semantic compaction is also opt-in and off by default:
+
+```yaml
+phi_memory:
+  semantic_compression_apply_enabled: true
+  auto_semantic_compression_on_write_pressure: true
+  auto_semantic_compression_threshold: 0.95
+  auto_semantic_compression_targets: [memory]   # add user only if you accept profile rewrites
+  auto_semantic_compression_min_savings_chars: 200
+```
+
+When enabled, the memory-write hook attempts semantic compaction only while an
+`add` would exceed the memory limit and the current target is above the
+configured threshold. It creates a backup first, records metadata on the memory
+tool response, and then retries the original add.
 
 If memory pressure reaches the 95% emergency band, `status`/`compress` can
-recommend `--apply-safe`, but no mutation happens unless that flag is present.
+recommend cleanup. No semantic mutation happens unless `--apply-semantic` is
+used or automatic semantic compaction has been explicitly enabled in config.
 Use `session_search` for old transcript details instead of stuffing full
 histories into active memory.
 

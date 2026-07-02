@@ -1,6 +1,6 @@
 name: phi-memory
 version: 2.0.0
-description: "Optional Phi Memory governance layer for built-in MEMORY.md and USER.md files, with sidecars, scheduling, recall fallback, dashboard, and proposal-only compression."
+description: "Optional Phi Memory governance layer for built-in MEMORY.md and USER.md files, with sidecars, scheduling, recall fallback, dashboard, proposal-first compression, and advanced opt-in semantic apply."
 author: NousResearch
 kind: standalone
 provides_tools:
