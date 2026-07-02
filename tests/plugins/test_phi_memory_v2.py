@@ -226,6 +226,34 @@ def test_semantic_compression_apply_writes_backup_when_enabled(tmp_path, monkeyp
     assert "Debug note" not in after
 
 
+def test_semantic_compression_apply_supports_user_profile(tmp_path, monkeypatch):
+    home, plugin = _load_phi(
+        tmp_path,
+        monkeypatch,
+        ["Project alpha uses FastAPI"],
+        extra_config="phi_memory:\n  semantic_compression_apply_enabled: true\n",
+    )
+    _write_memory(
+        home,
+        "user",
+        [
+            "User prefers concise responses with exact verification.",
+            "Debug note: tried random thing that was noisy and should be trimmed.",
+        ],
+    )
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=1000)
+    store.load_from_disk()
+
+    report = plugin.semantic.apply_semantic_compression(store, "user", budget=1000)
+    after = (home / "memories" / "USER.md").read_text(encoding="utf-8")
+
+    assert report["success"] is True
+    assert report["applied"] is True
+    assert Path(report["backup_path"]).exists()
+    assert "User prefers concise responses" in after
+    assert "Debug note" not in after
+
+
 def test_auto_semantic_compression_on_write_pressure_is_opt_in(tmp_path, monkeypatch):
     home, _plugin = _load_phi(
         tmp_path,
@@ -256,6 +284,45 @@ def test_auto_semantic_compression_on_write_pressure_is_opt_in(tmp_path, monkeyp
     assert Path(result["phi"]["semantic_compression"]["backup_path"]).exists()
     assert "Debug note" not in after
     assert "Remember this compact durable fact." in after
+
+
+def test_auto_semantic_compression_on_write_pressure_supports_user_target(tmp_path, monkeypatch):
+    home, _plugin = _load_phi(
+        tmp_path,
+        monkeypatch,
+        ["Project alpha uses FastAPI"],
+        extra_config=(
+            "phi_memory:\n"
+            "  semantic_compression_apply_enabled: true\n"
+            "  auto_semantic_compression_on_write_pressure: true\n"
+            "  auto_semantic_compression_threshold: 0.5\n"
+            "  auto_semantic_compression_min_savings_chars: 1\n"
+            "  auto_semantic_compression_targets:\n"
+            "    - memory\n"
+            "    - user\n"
+        ),
+    )
+    _write_memory(
+        home,
+        "user",
+        [
+            "User prefers concise responses with exact verification.",
+            "Debug note: tried random thing that was noisy and should be trimmed during semantic compression.",
+        ],
+    )
+    store = MemoryStore(memory_char_limit=1000, user_char_limit=130)
+    store.load_from_disk()
+
+    result = store.add("user", "User values safe memory automation.")
+    after = (home / "memories" / "USER.md").read_text(encoding="utf-8")
+
+    assert result["success"] is True
+    assert result["phi"]["semantic_compression_attempted"] is True
+    assert result["phi"]["semantic_compression"]["applied"] is True
+    assert Path(result["phi"]["semantic_compression"]["backup_path"]).exists()
+    assert "User prefers concise responses" in after
+    assert "User values safe memory automation." in after
+    assert "Debug note" not in after
 
 
 def test_dashboard_text_and_json_include_health_fields(tmp_path, monkeypatch):

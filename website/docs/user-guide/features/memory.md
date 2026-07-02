@@ -230,7 +230,9 @@ hermes phi-memory schedule --target memory
 hermes phi-memory skills candidates --target memory
 hermes phi-memory skills draft <candidate_id> --target memory
 hermes phi-memory compress --target memory --semantic --budget 1400
+hermes phi-memory compress --target user --semantic --budget 900
 hermes phi-memory compress --target memory --apply-semantic --budget 1400  # requires semantic_compression_apply_enabled=true
+hermes phi-memory compress --target user --apply-semantic --budget 900     # same gate, backs up USER.md first
 
 # Same governance surface is also available in live sessions/gateway chats:
 /phi-memory status
@@ -272,9 +274,14 @@ phi_memory:
   semantic_compression_apply_enabled: true
   auto_semantic_compression_on_write_pressure: true
   auto_semantic_compression_threshold: 0.95
-  auto_semantic_compression_targets: [memory]   # add user only if you accept profile rewrites
+  auto_semantic_compression_targets: [memory, user]
   auto_semantic_compression_min_savings_chars: 200
 ```
+
+Use `[memory]` if you want to keep automatic compaction away from `USER.md`.
+Including `user` lets the same backup-first policy compact the user profile,
+which is useful when `USER.md` is under emergency pressure but should be treated
+as higher impact than agent notes.
 
 When enabled, the memory-write hook attempts semantic compaction only while an
 `add` would exceed the memory limit and the current target is above the
